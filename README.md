@@ -110,7 +110,9 @@ CODEOWNERS-gated and the deletion is legible in the diff. Known gaps:
   repointing callers is undetectable.
 - **CODEOWNERS is not self-executing.** It requests a reviewer. The block only
   exists when branch protection requires Code Owner review and dismisses stale
-  approvals. `keystones doctor` will audit that.
+  approvals. `keystones doctor` audits that, and needs a token with
+  `admin:repo` to do it; it skips with a notice rather than failing when it
+  cannot look.
 
 ## Status
 
@@ -118,8 +120,8 @@ Phase 1. Python only.
 
 | Shipped | Not yet |
 |---|---|
-| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C10 index | C8 CODEOWNERS coverage, C9 removal check against the merge base, `doctor` |
-| `check`, `fix`, `add`, `list`, `index` | tree-sitter adapters, region markers, file-level fallback |
+| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index | `review_every` and `depends` are parsed but inert |
+| `check`, `fix`, `add`, `doctor`, `list`, `index` | tree-sitter adapters, region markers, file-level fallback |
 
 The hasher is versioned (`keystones-ast/1`) and treated as a wire format. A
 pinned-hash test runs on every supported CPython minor, because a hash basis

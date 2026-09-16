@@ -125,6 +125,11 @@ def test_warn_only_reports_without_failing(repo, run_cli):
     assert run_cli("check", PAYOUT, "--warn-only") == 0
 
 
+def test_repo_with_config_but_no_keystones_passes(repo, run_cli):
+    """Adopting the config must not demand an index for zero keystones."""
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
 def test_list_and_index_commands(repo, run_cli):
     add_keystone(run_cli)
     assert run_cli("list") == 0

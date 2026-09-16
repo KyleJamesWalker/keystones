@@ -185,6 +185,20 @@ def cmd_add(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_doctor(args, cfg: Config) -> int:
+    from keystones import doctor
+
+    try:
+        findings = doctor.run(cfg.repo_root, args.required_check)
+    except doctor.Unavailable as exc:
+        print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
+        return 0
+    _report(findings, args.format)
+    if not findings:
+        print("keystones doctor: branch protection requires owner review")
+    return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
+
+
 def cmd_list(args, cfg: Config) -> int:
     entries = _entries(cfg)
     if args.category:
@@ -243,6 +257,13 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("-m", "--message", required=True, help="why this is load-bearing")
     add.add_argument("--review-every", help="staleness budget, e.g. 180d")
     add.set_defaults(func=cmd_add)
+
+    doc = sub.add_parser(
+        "doctor", help="verify branch protection actually enforces review"
+    )
+    doc.add_argument("--required-check", default="keystones")
+    doc.add_argument("--format", choices=("plain", "github"), default="plain")
+    doc.set_defaults(func=cmd_doctor)
 
     listing = sub.add_parser("list", help="show every keystone")
     listing.add_argument("--category")

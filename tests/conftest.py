@@ -19,6 +19,13 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         '[tool.keystones]\nroot = "keystones"\ncategories = ["default", "finance"]\n'
     )
+    github = tmp_path / ".github"
+    github.mkdir()
+    (github / "CODEOWNERS").write_text(
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
     billing = tmp_path / "billing"
     billing.mkdir()
     (billing / "payout.py").write_text(PAYOUT_SRC)

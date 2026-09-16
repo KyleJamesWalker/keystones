@@ -44,3 +44,9 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
       - run: uv run keystones check --all --format github
+      # Skips with a notice unless the token can read branch protection,
+      # which the default GITHUB_TOKEN cannot. Set KEYSTONES_ADMIN_TOKEN to
+      # a PAT with admin:repo to turn this into a real check.
+      - run: uv run keystones doctor --format github
+        env:
+          GH_TOKEN: ${{ secrets.KEYSTONES_ADMIN_TOKEN || github.token }}

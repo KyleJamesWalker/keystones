@@ -173,8 +173,10 @@ def c7_categories(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
 def c10_index(cfg: Config, entries: dict[str, Entry]) -> list[Finding]:
     from keystones.sidecar import render_index
 
-    expected = render_index(sorted(entries.values(), key=lambda e: (e.category, e.id)))
     path = cfg.index_path
+    if not entries and not path.exists():
+        return []
+    expected = render_index(sorted(entries.values(), key=lambda e: (e.category, e.id)))
     actual = path.read_text() if path.exists() else ""
     if actual != expected:
         return [
@@ -218,7 +220,78 @@ def run_all(
         findings += c2_orphan_entries(resolved, entries)
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
+        findings += c8_ownership(cfg)
         findings += c10_index(cfg, entries)
         if base:
             findings += c9_removed(cfg, resolved, entry_list, base)
+    return findings
+
+
+def c8_ownership(cfg: Config) -> list[Finding]:
+    """The gate is only real if its own files are owned. See keystones/codeowners.py."""
+    from keystones import codeowners
+
+    owners_file, rules = codeowners.find(cfg.repo_root)
+    if owners_file is None:
+        return [
+            Finding(
+                "C8",
+                Severity.ERROR,
+                "no CODEOWNERS file; every keystone is unguarded. Expected one of "
+                + ", ".join(codeowners.SEARCH_PATHS),
+            )
+        ]
+
+    owners_rel = str(owners_file.relative_to(cfg.repo_root))
+    findings: list[Finding] = []
+
+    gate_files = [owners_rel, "pyproject.toml"]
+    for extra in (".pre-commit-config.yaml", ".pre-commit-hooks.yaml"):
+        if (cfg.repo_root / extra).is_file():
+            gate_files.append(extra)
+    workflows = cfg.repo_root / ".github" / "workflows"
+    if workflows.is_dir():
+        gate_files += sorted(
+            str(p.relative_to(cfg.repo_root)) for p in workflows.glob("*.y*ml")
+        )
+
+    for rel in gate_files:
+        rule = codeowners.owners_for(rules, rel)
+        if rule is None or not rule.owners:
+            findings.append(
+                Finding(
+                    "C8",
+                    Severity.ERROR,
+                    f"{rel} is part of the gate but has no CODEOWNERS owner, so the "
+                    "gate can be removed without review",
+                    owners_rel,
+                )
+            )
+
+    for category in cfg.categories:
+        probe = f"{cfg.root}/{category}/_probe.md"
+        rule = codeowners.owners_for(rules, probe)
+        if rule is None or not rule.owners:
+            findings.append(
+                Finding(
+                    "C8",
+                    Severity.ERROR,
+                    f"category '{category}' has no CODEOWNERS owner; editing its "
+                    "sidecars would require no review",
+                    owners_rel,
+                )
+            )
+            continue
+        if not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
+            findings.append(
+                Finding(
+                    "C8",
+                    Severity.ERROR,
+                    f"category '{category}' is owned by '{rule.pattern}' "
+                    f"(line {rule.lineno}), a rule outside {cfg.root}/. CODEOWNERS is "
+                    "last-match-wins, so that pattern silently reassigned the sidecars",
+                    owners_rel,
+                    rule.lineno,
+                )
+            )
     return findings
