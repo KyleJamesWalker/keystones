@@ -1,0 +1,35 @@
+---
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-toml
+      - id: check-yaml
+
+  # keystones gates its own hasher. See keystones/hasher/.
+  # `uv run` rather than `python -m`: the hook needs the project importable,
+  # and pre-commit's own environment does not have it installed.
+  - repo: local
+    hooks:
+      - id: keystones
+        name: keystones (staged)
+        entry: uv run keystones check --warn-only
+        language: system
+        types: [python]
+        verbose: true
+      - id: keystones-all
+        name: keystones
+        entry: uv run keystones check --all
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]

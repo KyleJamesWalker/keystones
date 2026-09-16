@@ -1,0 +1,28 @@
+---
+-   id: keystones
+    name: keystones (staged)
+    description: Fast drift check on staged files. C3 warns rather than blocking.
+    entry: keystones check --warn-only
+    language: python
+    types: [python]
+    stages: [pre-commit]
+    # C3 warns and exits zero here; pre-commit hides a passing hook's output.
+    verbose: true
+
+-   id: keystones-all
+    name: keystones
+    description: Whole-repo gate. Every check, blocking.
+    entry: keystones check --all
+    language: python
+    pass_filenames: false
+    always_run: true
+    stages: [pre-push, manual]
+
+-   id: keystones-doctor
+    name: keystones doctor
+    description: Verify branch protection actually requires owner review.
+    entry: keystones doctor
+    language: python
+    pass_filenames: false
+    always_run: true
+    stages: [manual]
