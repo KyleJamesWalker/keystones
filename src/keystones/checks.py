@@ -1,8 +1,9 @@
-"""C1 through C7 and C10. C8, C9 and doctor land with the GitHub integration."""
+"""Every check. C9 lives in removal.py, C11 in dependencies.py."""
 
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
 from keystones.config import Config
 from keystones.discovery import Resolved
@@ -221,6 +222,8 @@ def run_all(
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
         findings += c8_ownership(cfg)
+        findings += c11_dependencies(cfg, entry_list)
+        findings += stale_report(cfg, entry_list)
         findings += c10_index(cfg, entries)
         if base:
             findings += c9_removed(cfg, resolved, entry_list, base)
@@ -292,6 +295,41 @@ def c8_ownership(cfg: Config) -> list[Finding]:
                     "last-match-wins, so that pattern silently reassigned the sidecars",
                     owners_rel,
                     rule.lineno,
+                )
+            )
+    return findings
+
+
+def c11_dependencies(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
+    from keystones import dependencies
+
+    return dependencies.check(cfg.repo_root, entry_list)
+
+
+def stale_report(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
+    """Warnings only. A keystone going stale is a prompt, not a build break."""
+    from keystones.staleness import DurationError, age, humanize, parse_duration
+
+    findings = []
+    for entry in sorted(entry_list, key=lambda e: e.id):
+        if not entry.review_every:
+            continue
+        try:
+            budget = parse_duration(entry.review_every)
+        except DurationError as exc:
+            findings.append(Finding("C12", Severity.ERROR, str(exc), entry.path))
+            continue
+        rel = str(Path(entry.path).relative_to(cfg.repo_root))
+        elapsed = age(cfg.repo_root, rel)
+        if elapsed is not None and elapsed > budget:
+            findings.append(
+                Finding(
+                    "C12",
+                    Severity.WARNING,
+                    f"keystone '{entry.id}' was last reviewed {humanize(elapsed)} ago, "
+                    f"over its {entry.review_every} budget",
+                    entry.path,
+                    owner_hint=entry.category,
                 )
             )
     return findings

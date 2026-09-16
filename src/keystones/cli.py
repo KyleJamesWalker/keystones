@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from keystones import adapters, gitref, sidecar
+from keystones import adapters, dependencies, gitref, sidecar
 from keystones.checks import run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect
@@ -87,7 +87,14 @@ def cmd_fix(args, cfg: Config) -> int:
         src = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(src, item.target)
         target_str = str(item.target)
-        semantic_changed = semantic != entry.semantic
+        try:
+            depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        except dependencies.UnresolvedDependency as exc:
+            print(f"keystones: {entry.id}: {exc}", file=sys.stderr)
+            return 1
+        semantic_changed = (
+            semantic != entry.semantic or depends_hash != entry.depends_hash
+        )
         if not semantic_changed and text == entry.text and target_str == entry.target:
             continue
         if semantic_changed and not args.message:
@@ -105,6 +112,7 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.text = text
         entry.hasher = item.adapter.hasher_id
         entry.source = item.adapter.canonical_source(src, item.target)
+        entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
         changed.append(entry.id)
 
@@ -172,6 +180,10 @@ def cmd_add(args, cfg: Config) -> int:
         semantic=semantic,
         text=text,
         review_every=args.review_every,
+        depends=list(args.depends or []),
+        depends_hash=dependencies.combined_hash(
+            cfg.repo_root, list(args.depends or [])
+        ),
         why=args.message,
         source=adapter.canonical_source(new_src, new_target),
         history=[
@@ -200,12 +212,34 @@ def cmd_doctor(args, cfg: Config) -> int:
 
 
 def cmd_list(args, cfg: Config) -> int:
+    from keystones.staleness import DurationError, age, humanize, parse_duration
+
     entries = _entries(cfg)
     if args.category:
         entries = [e for e in entries if e.category == args.category]
+
+    rows = []
     for entry in sorted(entries, key=lambda e: (e.category, e.id)):
-        print(f"{entry.category:12} {entry.id:28} {entry.target}")
-    print(f"\n{len(entries)} keystone(s)")
+        label = ""
+        overdue = False
+        if entry.review_every:
+            try:
+                budget = parse_duration(entry.review_every)
+            except DurationError:
+                label = "bad review_every"
+            else:
+                rel = str(Path(entry.path).relative_to(cfg.repo_root))
+                elapsed = age(cfg.repo_root, rel)
+                if elapsed is not None:
+                    overdue = elapsed > budget
+                    label = f"{humanize(elapsed)} ago" + (" OVERDUE" if overdue else "")
+        if args.stale and not overdue:
+            continue
+        rows.append((entry, label))
+
+    for entry, label in rows:
+        print(f"{entry.category:12} {entry.id:28} {entry.target:52} {label}")
+    print(f"\n{len(rows)} keystone(s)")
     return 0
 
 
@@ -256,6 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--category", default="default")
     add.add_argument("-m", "--message", required=True, help="why this is load-bearing")
     add.add_argument("--review-every", help="staleness budget, e.g. 180d")
+    add.add_argument(
+        "--depends",
+        action="append",
+        help="a same-repo symbol this keystone depends on, path.py::Symbol",
+    )
     add.set_defaults(func=cmd_add)
 
     doc = sub.add_parser(
@@ -267,6 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     listing = sub.add_parser("list", help="show every keystone")
     listing.add_argument("--category")
+    listing.add_argument("--stale", action="store_true", help="only overdue keystones")
     listing.set_defaults(func=cmd_list)
 
     index = sub.add_parser("index", help="regenerate INDEX.md")

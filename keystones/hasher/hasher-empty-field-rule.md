@@ -4,6 +4,7 @@
 target = "src/keystones/hashing.py::_is_default"
 hasher = "keystones-ast/1"
 semantic = "sha256:d68dfd52467bccf212ad8d50efd00ec4f0bb97e72453f7599596e9133c00161d"
+review_every = "1y"
 text = "sha256:97a250e44d1a5827992e598ae30e4c16cd422e7068ef71fd4f31252e80e6d913"
 ```
 

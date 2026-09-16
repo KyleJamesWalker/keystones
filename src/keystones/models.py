@@ -47,6 +47,7 @@ class Entry:
     text: str
     review_every: str | None = None
     depends: list[str] = field(default_factory=list)
+    depends_hash: str = ""
     why: str = ""
     source: str = ""
     source_lang: str = "python"

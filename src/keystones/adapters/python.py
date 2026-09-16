@@ -8,7 +8,7 @@ import re
 import tokenize
 
 from keystones.adapters.base import ResolutionError
-from keystones.hashing import HASHER_ID, semantic_hash, text_hash
+from keystones.hashing import HASHER_ID, render, semantic_hash, text_hash
 from keystones.models import Marker, Scope, Target
 
 MARKER_RE = re.compile(
@@ -176,4 +176,28 @@ def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
     for name, node in _definitions(ast.parse(src)):
         if name == qualname:
             return Target(path, name, _start_line(node), node.end_lineno)
+    return None
+
+
+def _module_assignments(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    out: list[tuple[str, ast.AST]] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    out.append((target.id, node))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            out.append((node.target.id, node))
+    return out
+
+
+def render_symbol(src: str, symbol: str) -> str | None:
+    """Canonical text for a `depends` target: a definition or a module constant."""
+    tree = ast.parse(src)
+    for qualname, node in _definitions(tree):
+        if qualname == symbol:
+            return render(node)
+    for name, node in _module_assignments(tree):
+        if name == symbol:
+            return render(node)
     return None

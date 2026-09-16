@@ -57,6 +57,7 @@ def parse(path: Path, category: str) -> Entry:
         text=meta["text"],
         review_every=meta.get("review_every"),
         depends=list(meta.get("depends", [])),
+        depends_hash=meta.get("depends_hash", ""),
         why=why,
         source=source,
         source_lang=source_lang,
@@ -83,6 +84,7 @@ def render(entry: Entry) -> str:
         meta["review_every"] = entry.review_every
     if entry.depends:
         meta["depends"] = entry.depends
+        meta["depends_hash"] = entry.depends_hash
 
     lines = [f"# {entry.id}", "", "```toml"]
     lines += [f"{key} = {_toml_value(value)}" for key, value in meta.items()]

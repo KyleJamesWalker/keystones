@@ -60,6 +60,23 @@ keystones fix -m "switched to banker's rounding per policy review"
 sidecar diff contains the old and new source, so the owner reviews code rather
 than a hash.
 
+### Dependencies and staleness
+
+A keystone can name same-repo symbols it depends on, so a change one call frame
+away is still an owner-review event:
+
+```bash
+keystones add billing/payout.py::compute_payout --id payout-rounding \
+    --category finance -m "GAAP rounding" \
+    --depends billing/helpers.py::BASE_RATE \
+    --depends billing/helpers.py::quantize
+```
+
+`review_every = "180d"` sets a staleness budget. There is deliberately no
+`reviewed` field: a stored date would be whatever `fix` last wrote, so the age
+comes from `git log` on the sidecar itself. Going stale warns and shows up in
+`keystones list --stale`; it never fails the build.
+
 ## Configuration
 
 ```toml
@@ -93,6 +110,7 @@ The hash is taken over a canonical rendering of the AST node, not its text.
 | edit a `#` comment inside the keystone | needs a note, no owner review |
 | change a literal, a call, control flow | needs owner review |
 | edit a docstring | needs owner review, docstrings are AST nodes |
+| change a symbol listed in `depends` | needs owner review |
 | delete the marker | fails until the entry goes too |
 
 Markers are found by lexing, so a marker-shaped string literal is not a marker.
@@ -105,7 +123,8 @@ delete the marker and the entry in one pull request. That pull request is
 CODEOWNERS-gated and the deletion is legible in the diff. Known gaps:
 
 - **Indirection.** A keystone on `compute_payout` says nothing about a helper it
-  calls. Keystone the helper too, or the file.
+  calls, unless you name that helper in `depends`. Naming it is opt-in and
+  manual, so the hole is narrowed rather than closed.
 - **Copy and repoint.** Copying the body to a new unmarked function and
   repointing callers is undetectable.
 - **CODEOWNERS is not self-executing.** It requests a reviewer. The block only
@@ -120,7 +139,7 @@ Phase 1. Python only.
 
 | Shipped | Not yet |
 |---|---|
-| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index | `review_every` and `depends` are parsed but inert |
+| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness | call-closure advisory, CI-written `reviewed_by` |
 | `check`, `fix`, `add`, `doctor`, `list`, `index` | tree-sitter adapters, region markers, file-level fallback |
 
 The hasher is versioned (`keystones-ast/1`) and treated as a wire format. A
