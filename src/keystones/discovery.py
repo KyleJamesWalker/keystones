@@ -76,10 +76,23 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
 
 def collect(
     cfg: Config, paths: list[str] | None = None
-) -> tuple[list[Resolved], list[Finding]]:
+) -> tuple[list[Resolved], list[Finding], set[str]]:
     resolved: list[Resolved] = []
     findings: list[Finding] = []
+    skipped: set[str] = set()
     for rel in source_files(cfg, paths):
+        if adapters.needs_extra(rel):
+            skipped.add(rel)
+            findings.append(
+                Finding(
+                    "extra",
+                    Severity.ERROR,
+                    f"{rel} needs a parser that is not installed. "
+                    "Run: pip install 'keystones[all]'",
+                    rel,
+                )
+            )
+            continue
         adapter = adapters.for_path(rel)
         if adapter is None:
             continue
@@ -100,4 +113,4 @@ def collect(
                 )
                 continue
             resolved.append(Resolved(marker, target, adapter))
-    return resolved, findings
+    return resolved, findings, skipped

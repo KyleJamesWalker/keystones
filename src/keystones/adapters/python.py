@@ -217,3 +217,7 @@ def render_symbol(src: str, symbol: str) -> str | None:
         if name == symbol:
             return render(node)
     return None
+
+
+def hasher_id_for_path(path: str) -> str:
+    return HASHER_ID

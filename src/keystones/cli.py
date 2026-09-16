@@ -53,7 +53,7 @@ def cmd_check(args, cfg: Config) -> int:
                 "Pass --base <ref>, or --no-base to silence this.",
                 file=sys.stderr,
             )
-    resolved, findings = collect(cfg, paths)
+    resolved, findings, skipped = collect(cfg, paths)
     findings = findings + run_all(
         cfg,
         resolved,
@@ -61,6 +61,7 @@ def cmd_check(args, cfg: Config) -> int:
         scoped=scoped,
         warn_only=args.warn_only,
         base=base,
+        skipped=skipped,
     )
     _report(findings, args.format)
     errors = [f for f in findings if f.severity is Severity.ERROR]
@@ -70,7 +71,7 @@ def cmd_check(args, cfg: Config) -> int:
 
 
 def cmd_fix(args, cfg: Config) -> int:
-    resolved, findings = collect(cfg, None)
+    resolved, findings, _ = collect(cfg, None)
     if findings:
         _report(findings, "plain")
         return 1
@@ -111,7 +112,7 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.target = target_str
         entry.semantic = semantic
         entry.text = text
-        entry.hasher = item.adapter.hasher_id
+        entry.hasher = item.adapter.hasher_id_for_path(item.marker.path)
         entry.source = item.adapter.canonical_source(src, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
@@ -142,7 +143,7 @@ def _adopt(args, cfg: Config) -> int:
     This is the path C1 points at, and the only one that works for a region,
     whose boundaries are already in the file.
     """
-    resolved, findings = collect(cfg, None)
+    resolved, findings, _ = collect(cfg, None)
     if findings:
         _report(findings, "plain")
         return 1
@@ -176,7 +177,7 @@ def _adopt(args, cfg: Config) -> int:
         id=args.id,
         category=category,
         target=str(item.target),
-        hasher=item.adapter.hasher_id,
+        hasher=item.adapter.hasher_id_for_path(item.marker.path),
         semantic=semantic,
         text=text_digest,
         review_every=args.review_every,
@@ -251,7 +252,7 @@ def cmd_add(args, cfg: Config) -> int:
         id=args.id,
         category=args.category,
         target=str(new_target),
-        hasher=adapter.hasher_id,
+        hasher=adapter.hasher_id_for_path(rel),
         semantic=semantic,
         text=text,
         review_every=args.review_every,

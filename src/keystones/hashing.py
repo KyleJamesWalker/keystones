@@ -50,7 +50,7 @@ def render(node: ast.AST) -> str:
 
 
 def semantic_hash(node: ast.AST) -> str:
-    return _digest(render(node))
+    return digest(render(node))
 
 
 def text_hash(node: ast.AST, comments: list[str]) -> str:
@@ -60,8 +60,8 @@ def text_hash(node: ast.AST, comments: list[str]) -> str:
     be deleted from inside a keystone with the gate staying green.
     """
     payload = render(node) + "\n--comments--\n" + "\n".join(comments)
-    return _digest(payload)
+    return digest(payload)
 
 
-def _digest(payload: str) -> str:
+def digest(payload: str) -> str:
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()

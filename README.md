@@ -15,7 +15,8 @@ lines. That is why those rules get deleted. A keystone protects the function.
 ## Install
 
 ```bash
-pip install keystones
+pip install keystones          # Python only, zero dependencies
+pip install 'keystones[all]'   # adds TypeScript, JavaScript, Go and Terraform
 ```
 
 As a pre-commit hook:
@@ -167,15 +168,32 @@ A marker already written into a file is adopted without passing a target:
 keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 ```
 
+## Languages
+
+| Language | Granularity | Reformat-immune |
+|---|---|---|
+| Python | function, method, class, test, region, file | yes, stdlib `ast` |
+| TypeScript, TSX, JavaScript | function, method, class, interface, type alias, region, file | yes, tree-sitter |
+| Go | func, method, type, const, region, file | yes, tree-sitter |
+| Terraform, HCL | block, region, file | yes, tree-sitter |
+| everything else | region, file | no, normalised text |
+
+tree-sitter languages need the `all` extra. Grammars are pinned exactly and the
+grammar version is part of the stored hasher id, so a grammar bump is reported
+as a hasher mismatch rather than as code drift.
+
+Separator tokens (`,` and `;`) are excluded from the hash, because a formatter
+adds a trailing comma whenever it wraps arguments and ASI makes semicolons
+optional. Operators are not excluded: `a + b` and `a - b` do not collide.
+
 ## Status
 
-Phase 2 in progress. Python has an AST adapter; every other file type has
-regions and whole-file coverage.
+Phase 2 in progress.
 
 | Shipped | Not yet |
 |---|---|
 | C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness | call-closure advisory, CI-written `reviewed_by` |
-| `check`, `fix`, `add`, `doctor`, `list`, `index` | tree-sitter adapters for TS/JS, Go and HCL; `migrate` |
+| `check`, `fix`, `add`, `doctor`, `list`, `index` | `migrate` for hasher and grammar bumps |
 
 The hasher is versioned (`keystones-ast/1`) and treated as a wire format. A
 pinned-hash test runs on every supported CPython minor, because a hash basis

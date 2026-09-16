@@ -98,3 +98,7 @@ def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
 
 def hash_stored_source(source: str, target: str) -> str:
     return "sha256:" + hashlib.sha256(normalise(source).encode("utf-8")).hexdigest()
+
+
+def hasher_id_for_path(path: str) -> str:
+    return HASHER_ID

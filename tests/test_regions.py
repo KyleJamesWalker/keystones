@@ -8,26 +8,24 @@ import pytest
 from keystones.adapters import fallback
 from keystones.markers import RegionError, scan_lines
 
-TF = """resource "google_compute_network" "vpc" {
-  name = "prod"
-}
+# A type no adapter parses, which is the whole point of this module.
+CONFIG = """apiVersion: v1
+kind: ConfigMap
 
 # keystone:start(infra): vpc-peering-cidrs
-resource "google_compute_network_peering" "prod" {
-  peer_network  = var.peer
-  export_routes = true
-}
+peering:
+  peerNetwork: prod-vpc
+  exportRoutes: true
 # keystone:end
 
-resource "google_storage_bucket" "logs" {
-  name = "logs"
-}
+logging:
+  bucket: logs
 """
 
 
 @pytest.fixture
 def infra(repo, run_cli):
-    (repo / "main.tf").write_text(TF)
+    (repo / "net.yaml").write_text(CONFIG)
     pyproject = repo / "pyproject.toml"
     pyproject.write_text(
         pyproject.read_text().replace(
@@ -36,25 +34,25 @@ def infra(repo, run_cli):
         )
     )
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "tf"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "config"], cwd=repo, check=True)
     assert run_cli("add", "--id", "vpc-peering-cidrs", "-m", "Peering CIDRs.") == 0
     return repo
 
 
-def edit_tf(repo: Path, old: str, new: str) -> None:
-    path = repo / "main.tf"
+def edit_config(repo: Path, old: str, new: str) -> None:
+    path = repo / "net.yaml"
     text = path.read_text()
     assert old in text
     path.write_text(text.replace(old, new))
 
 
 def test_region_body_excludes_the_marker_lines():
-    _, regions = scan_lines("main.tf", TF)
-    assert regions["vpc-peering-cidrs"] == (6, 9)
+    _, regions = scan_lines("net.yaml", CONFIG)
+    assert regions["vpc-peering-cidrs"] == (5, 7)
 
 
 def test_region_marker_carries_its_category():
-    found, _ = scan_lines("main.tf", TF)
+    found, _ = scan_lines("net.yaml", CONFIG)
     assert found[0].category == "infra"
 
 
@@ -94,8 +92,8 @@ def test_normalise_collapses_whitespace_noise():
 
 def test_adopting_a_region_records_its_line_range(infra):
     sidecar = (infra / "keystones" / "infra" / "vpc-peering-cidrs.md").read_text()
-    assert "main.tf#L6-L9" in sidecar
-    assert "export_routes" in sidecar, "the stored source is the region body"
+    assert "net.yaml#L5-L7" in sidecar
+    assert "exportRoutes" in sidecar, "the stored source is the region body"
 
 
 def test_clean_region_passes(infra, run_cli):
@@ -103,28 +101,22 @@ def test_clean_region_passes(infra, run_cli):
 
 
 def test_editing_inside_the_region_trips_the_gate(infra, run_cli):
-    edit_tf(infra, "export_routes = true", "export_routes = false")
+    edit_config(infra, "exportRoutes: true", "exportRoutes: false")
     assert run_cli("check", "--all", "--no-base") == 1
 
 
 def test_editing_outside_the_region_does_not(infra, run_cli):
     """This is the whole point of regions over whole-file keystones."""
-    edit_tf(infra, 'name = "logs"', 'name = "logs-v2"')
+    edit_config(infra, "bucket: logs", "bucket: logs-v2")
     assert run_cli("check", "--all", "--no-base") == 0
 
 
 def test_shifting_the_region_down_is_an_auto_fixable_move(infra, run_cli):
-    edit_tf(
-        infra,
-        'resource "google_compute_network" "vpc" {',
-        'variable "peer" {}\n\nresource "google_compute_network" "vpc" {',
-    )
+    edit_config(infra, "apiVersion: v1", "# added\n# lines\napiVersion: v1")
     assert run_cli("fix") == 0, "a pure move needs no note"
     assert run_cli("check", "--all", "--no-base") == 0
-    assert (
-        "main.tf#L8-L11"
-        in (infra / "keystones" / "infra" / "vpc-peering-cidrs.md").read_text()
-    )
+    sidecar = (infra / "keystones" / "infra" / "vpc-peering-cidrs.md").read_text()
+    assert "net.yaml#L7-L9" in sidecar
 
 
 def test_whole_file_keystone_on_an_unparsed_file(repo, run_cli):
@@ -136,7 +128,7 @@ def test_whole_file_keystone_on_an_unparsed_file(repo, run_cli):
 
 
 def test_point_marker_without_a_parser_is_a_helpful_error(repo, run_cli):
-    (repo / "vars.tf").write_text('# keystone: no-parser\nvariable "x" {}\n')
+    (repo / "app.conf").write_text("# keystone: no-parser\nsetting = 1\n")
     assert run_cli("check", "--all", "--no-base") == 1
 
 

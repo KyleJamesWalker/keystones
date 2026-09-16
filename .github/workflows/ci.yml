@@ -26,6 +26,20 @@ jobs:
       - run: uv sync --group dev --python ${{ matrix.python }}
       - run: uv run --python ${{ matrix.python }} pytest -q
 
+  # The tool must stay usable with no parser dependency at all, so this runs
+  # the suite without the extra. The tree-sitter tests skip themselves.
+  test-no-extra:
+    name: test (no extra)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      # An explicitly isolated venv: `uv run --with .` still resolves the
+      # project's dev group, so it does not actually test the no-extra path.
+      - run: uv venv /tmp/noextra
+      - run: uv pip install --python /tmp/noextra/bin/python pytest .
+      - run: /tmp/noextra/bin/python -m pytest -q
+
   lint:
     runs-on: ubuntu-latest
     steps:

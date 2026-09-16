@@ -32,9 +32,12 @@ def c1_orphan_markers(
 
 
 def c2_orphan_entries(
-    resolved: list[Resolved], entries: dict[str, Entry]
+    resolved: list[Resolved],
+    entries: dict[str, Entry],
+    skipped: set[str] | None = None,
 ) -> list[Finding]:
     seen = {item.marker.id for item in resolved}
+    unreadable = skipped or set()
     return [
         Finding(
             "C2",
@@ -45,6 +48,7 @@ def c2_orphan_entries(
         )
         for entry_id, entry in sorted(entries.items())
         if entry_id not in seen
+        and entry.target.split("::")[0].split("#")[0] not in unreadable
     ]
 
 
@@ -58,6 +62,9 @@ def c3_c4_hashes(
     for item in resolved:
         entry = entries.get(item.marker.id)
         if entry is None:
+            continue
+        expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        if entry.hasher and entry.hasher != expected_hasher:
             continue
         src = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(src, item.target)
@@ -102,7 +109,11 @@ def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
             )
             continue
         rel = entry.target.split("::")[0].split("#")[0]
+        if adapters.needs_extra(rel):
+            continue
         adapter = adapters.for_path(rel)
+        if entry.hasher and entry.hasher != adapter.hasher_id_for_path(rel):
+            continue
         try:
             actual = adapter.hash_stored_source(entry.source, entry.target)
         except SyntaxError as exc:
@@ -210,6 +221,7 @@ def run_all(
     scoped: bool = False,
     warn_only: bool = False,
     base: str | None = None,
+    skipped: set[str] | None = None,
 ) -> list[Finding]:
     """`scoped` means only some files were seen, so whole-repo checks are skipped."""
     entries = {entry.id: entry for entry in entry_list}
@@ -217,11 +229,12 @@ def run_all(
     findings += c3_c4_hashes(cfg, resolved, entries, warn_only=warn_only)
     findings += c7_categories(cfg, resolved)
     if not scoped:
-        findings += c2_orphan_entries(resolved, entries)
+        findings += c2_orphan_entries(resolved, entries, skipped)
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
         findings += c8_ownership(cfg)
         findings += c11_dependencies(cfg, entry_list)
+        findings += hasher_mismatch(cfg, entry_list)
         findings += stale_report(cfg, entry_list)
         findings += c10_index(cfg, entries)
         if base:
@@ -332,3 +345,33 @@ def stale_report(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
                 )
             )
     return findings
+
+
+def hasher_mismatch(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
+    """Reported on its own, never as C3.
+
+    A stored hash produced by a different serializer or grammar version says
+    nothing about whether the code changed, so failing it as drift would send
+    people to `fix` and rubber-stamp a real review.
+    """
+    from keystones import adapters
+
+    out = []
+    for entry in sorted(entry_list, key=lambda e: e.id):
+        rel = entry.target.split("::")[0].split("#")[0]
+        if adapters.needs_extra(rel):
+            continue
+        adapter = adapters.for_path(rel)
+        expected = adapter.hasher_id_for_path(rel)
+        if entry.hasher and entry.hasher != expected:
+            out.append(
+                Finding(
+                    "C13",
+                    Severity.WARNING,
+                    f"keystone '{entry.id}' was hashed by {entry.hasher} but this "
+                    f"install uses {expected}. Its hash cannot be compared. Run "
+                    "`keystones migrate`, or install the matching extra.",
+                    entry.path,
+                )
+            )
+    return out
