@@ -106,6 +106,7 @@ The hash is taken over a canonical rendering of the AST node, not its text.
 
 | Change | Result |
 |---|---|
+| edit outside a region, in the same file | passes |
 | `ruff format`, line rewrap, quote style | passes |
 | edit a `#` comment inside the keystone | needs a note, no owner review |
 | change a literal, a call, control flow | needs owner review |
@@ -133,14 +134,48 @@ CODEOWNERS-gated and the deletion is legible in the diff. Known gaps:
   `admin:repo` to do it; it skips with a notice rather than failing when it
   cannot look.
 
+## Any file type
+
+Python gets AST granularity. Everything else gets whole-file or **region**
+keystones, with no parser and no dependency:
+
+```hcl
+# keystone:start(infra): vpc-peering-cidrs
+resource "google_compute_network_peering" "prod" {
+  peer_network  = var.peer
+  export_routes = true
+}
+# keystone:end
+```
+
+Editing inside the region trips the gate; editing elsewhere in the file does
+not. That is the point of regions - a whole-file keystone on a
+formatter-managed YAML or Terraform file trips on every unrelated edit, which
+gets the tool uninstalled.
+
+`#`, `//`, `--`, `/* */` and `<!-- -->` all work. Region bodies are compared as
+normalised text (LF, no trailing whitespace, no runs of blank lines), so a
+reformat inside a region does trip it. Only the Python adapter is
+reformat-immune.
+
+A file that documents markers rather than carrying them opts out with a
+`keystones: ignore-file` directive anywhere in it. This README has one.
+
+A marker already written into a file is adopted without passing a target:
+
+```bash
+keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
+```
+
 ## Status
 
-Phase 1. Python only.
+Phase 2 in progress. Python has an AST adapter; every other file type has
+regions and whole-file coverage.
 
 | Shipped | Not yet |
 |---|---|
 | C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness | call-closure advisory, CI-written `reviewed_by` |
-| `check`, `fix`, `add`, `doctor`, `list`, `index` | tree-sitter adapters, region markers, file-level fallback |
+| `check`, `fix`, `add`, `doctor`, `list`, `index` | tree-sitter adapters for TS/JS, Go and HCL; `migrate` |
 
 The hasher is versioned (`keystones-ast/1`) and treated as a wire format. A
 pinned-hash test runs on every supported CPython minor, because a hash basis
@@ -149,3 +184,5 @@ that moves would fail every keystone at once.
 ## License
 
 MIT
+
+<!-- keystones: ignore-file -->

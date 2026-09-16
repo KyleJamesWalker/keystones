@@ -23,8 +23,7 @@ def c1_orphan_markers(
                     "C1",
                     Severity.ERROR,
                     f"keystone '{item.marker.id}' has no sidecar entry; "
-                    f"run `keystones add {item.target} --id {item.marker.id} "
-                    f'--category {item.marker.category} -m "<why>"`',
+                    f'run `keystones add --id {item.marker.id} -m "<why>"`',
                     item.marker.path,
                     item.marker.lineno,
                 )
@@ -88,7 +87,7 @@ def c3_c4_hashes(
 
 
 def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
-    from keystones.adapters import python as python_adapter
+    from keystones import adapters
 
     out = []
     for entry in sorted(entries.values(), key=lambda e: e.id):
@@ -102,10 +101,10 @@ def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
                 )
             )
             continue
+        rel = entry.target.split("::")[0].split("#")[0]
+        adapter = adapters.for_path(rel)
         try:
-            actual = python_adapter.hash_fragment(
-                entry.source, "::" not in entry.target
-            )
+            actual = adapter.hash_stored_source(entry.source, entry.target)
         except SyntaxError as exc:
             out.append(
                 Finding(

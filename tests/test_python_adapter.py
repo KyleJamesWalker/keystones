@@ -86,4 +86,5 @@ def test_canonical_source_includes_decorators():
     target = adapter.resolve(DECORATED, one_marker(DECORATED))
     source = adapter.canonical_source(DECORATED, target)
     assert source.startswith("@functools.cache")
-    assert adapter.hash_fragment(source, False) == adapter.hashes(DECORATED, target)[0]
+    rehashed = adapter.hash_stored_source(source, "x.py::compute_payout")
+    assert rehashed == adapter.hashes(DECORATED, target)[0]

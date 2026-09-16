@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import ast
 import io
-import re
 import tokenize
 
+from keystones import markers as marker_grammar
+from keystones.adapters import fallback
 from keystones.adapters.base import ResolutionError
 from keystones.hashing import HASHER_ID, render, semantic_hash, text_hash
 from keystones.models import Marker, Scope, Target
-
-MARKER_RE = re.compile(
-    r"#\s*keystone(?:\(\s*([^)]*?)\s*\))?\s*:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$"
-)
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
@@ -29,27 +26,31 @@ def _tokens(src: str) -> list[tokenize.TokenInfo]:
         return []
 
 
+def _comments(src: str) -> list[tuple[int, str]]:
+    return [(t.start[0], t.string) for t in _tokens(src) if t.type == tokenize.COMMENT]
+
+
+def _regions(path: str, src: str) -> dict[str, tuple[int, int]]:
+    return marker_grammar.scan_lines(path, src, _comments(src))[1]
+
+
 def markers(path: str, src: str) -> list[Marker]:
-    """Find markers by lexing, so a marker-shaped string literal is not one."""
-    found = []
+    """Everything comes from the lexer, so a marker-shaped string is not a marker.
+
+    That matters for regions too: a test fixture holding an example region in a
+    triple-quoted string must not register one.
+    """
+    found = [
+        m
+        for m in marker_grammar.scan_lines(path, src, _comments(src))[0]
+        if m.scope is Scope.REGION
+    ]
     for tok in _tokens(src):
         if tok.type != tokenize.COMMENT:
             continue
-        match = MARKER_RE.search(tok.string)
-        if not match:
-            continue
-        qualifiers = [q.strip() for q in (match.group(1) or "").split(",") if q.strip()]
-        scope = Scope.FILE if "file" in qualifiers else Scope.NODE
-        category = next((q for q in qualifiers if q != "file"), "default")
-        found.append(
-            Marker(
-                id=match.group(2),
-                category=category,
-                scope=scope,
-                path=path,
-                lineno=tok.start[0],
-            )
-        )
+        point = marker_grammar.parse_point(tok.string, path, tok.start[0])
+        if point is not None:
+            found.append(point)
     return found
 
 
@@ -57,7 +58,8 @@ def _marker_lines(src: str) -> set[int]:
     return {
         tok.start[0]
         for tok in _tokens(src)
-        if tok.type == tokenize.COMMENT and MARKER_RE.search(tok.string)
+        if tok.type == tokenize.COMMENT
+        and marker_grammar.looks_like_a_marker(tok.string)
     }
 
 
@@ -100,6 +102,14 @@ def _definitions(tree: ast.Module) -> list[tuple[str, ast.AST]]:
 
 
 def resolve(src: str, marker: Marker) -> Target:
+    if marker.scope is Scope.REGION:
+        regions = _regions(marker.path, src)
+        if marker.id not in regions:
+            raise ResolutionError(f"{marker.path}: region '{marker.id}' is unbalanced")
+        start, end = regions[marker.id]
+        if start > end:
+            raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
+        return Target(marker.path, None, start, end, region=True)
     tree = ast.parse(src)
     if marker.scope is Scope.FILE:
         end = (
@@ -153,6 +163,8 @@ def _comments_in(src: str, start: int, end: int) -> list[str]:
 
 
 def hashes(src: str, target: Target) -> tuple[str, str]:
+    if target.region:
+        return fallback.hashes(src, target)
     node = _node_for(src, target)
     return semantic_hash(node), text_hash(
         node, _comments_in(src, target.start, target.end)
@@ -161,14 +173,18 @@ def hashes(src: str, target: Target) -> tuple[str, str]:
 
 def canonical_source(src: str, target: Target) -> str:
     """The stored code the reviewer reads, and the proof for a hasher migration."""
+    if target.region:
+        return fallback.canonical_source(src, target)
     node = _node_for(src, target)
     return ast.unparse(node)
 
 
-def hash_fragment(source: str, is_module: bool) -> str:
+def hash_stored_source(source: str, target: str) -> str:
     """Re-hash stored canonical source. Backs C5 and hasher migration proofs."""
+    if "#L" in target:
+        return fallback.hash_stored_source(source, target)
     tree = ast.parse(source)
-    node = tree if is_module else tree.body[0]
+    node = tree if "::" not in target else tree.body[0]
     return semantic_hash(node)
 
 

@@ -9,6 +9,7 @@ from enum import StrEnum
 class Scope(StrEnum):
     NODE = "node"
     FILE = "file"
+    REGION = "region"
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,14 @@ class Target:
     qualname: str | None
     start: int
     end: int
+    region: bool = False
 
     def __str__(self) -> str:
-        return f"{self.path}::{self.qualname}" if self.qualname else self.path
+        if self.qualname:
+            return f"{self.path}::{self.qualname}"
+        if self.region:
+            return f"{self.path}#L{self.start}-L{self.end}"
+        return self.path
 
 
 @dataclass

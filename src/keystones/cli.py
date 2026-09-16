@@ -92,9 +92,10 @@ def cmd_fix(args, cfg: Config) -> int:
         except dependencies.UnresolvedDependency as exc:
             print(f"keystones: {entry.id}: {exc}", file=sys.stderr)
             return 1
-        semantic_changed = (
-            semantic != entry.semantic or depends_hash != entry.depends_hash
-        )
+        # An entry with no dependencies stores no depends_hash, so the absent
+        # value has to compare equal to the empty one or every move looks semantic.
+        stored_depends = entry.depends_hash or dependencies.EMPTY
+        semantic_changed = semantic != entry.semantic or depends_hash != stored_depends
         if not semantic_changed and text == entry.text and target_str == entry.target:
             continue
         if semantic_changed and not args.message:
@@ -123,7 +124,81 @@ def cmd_fix(args, cfg: Config) -> int:
     return 0
 
 
+def _lang_for(path: str) -> str:
+    return {
+        ".py": "python",
+        ".pyi": "python",
+        ".tf": "hcl",
+        ".sql": "sql",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".json": "json",
+    }.get(Path(path).suffix, "")
+
+
+def _adopt(args, cfg: Config) -> int:
+    """Create the sidecar for a marker already written into the source.
+
+    This is the path C1 points at, and the only one that works for a region,
+    whose boundaries are already in the file.
+    """
+    resolved, findings = collect(cfg, None)
+    if findings:
+        _report(findings, "plain")
+        return 1
+
+    match = [item for item in resolved if item.marker.id == args.id]
+    if not match:
+        print(
+            f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
+            "write one, or check the id.",
+            file=sys.stderr,
+        )
+        return 1
+    if len(match) > 1:
+        where = ", ".join(f"{m.marker.path}:{m.marker.lineno}" for m in match)
+        print(
+            f"keystones: id '{args.id}' appears more than once: {where}",
+            file=sys.stderr,
+        )
+        return 1
+
+    item = match[0]
+    category = item.marker.category
+    if cfg.sidecar_path(category, args.id).exists():
+        print(f"keystones: '{args.id}' already exists in {category}", file=sys.stderr)
+        return 1
+
+    src = (cfg.repo_root / item.marker.path).read_text()
+    semantic, text_digest = item.adapter.hashes(src, item.target)
+    depends = list(args.depends or [])
+    entry = Entry(
+        id=args.id,
+        category=category,
+        target=str(item.target),
+        hasher=item.adapter.hasher_id,
+        semantic=semantic,
+        text=text_digest,
+        review_every=args.review_every,
+        depends=depends,
+        depends_hash=dependencies.combined_hash(cfg.repo_root, depends),
+        why=args.message,
+        source=item.adapter.canonical_source(src, item.target),
+        source_lang=_lang_for(item.marker.path),
+        history=[
+            f"{datetime.date.today().isoformat()} - initial keystone. "
+            f"{_git_author(cfg.repo_root)}"
+        ],
+    )
+    sidecar.write(cfg.sidecar_path(category, args.id), entry)
+    _write_index(cfg)
+    print(f"keystones: adopted '{args.id}' on {item.target}")
+    return 0
+
+
 def cmd_add(args, cfg: Config) -> int:
+    if args.target is None:
+        return _adopt(args, cfg)
     if "::" in args.target:
         rel, qualname = args.target.split("::", 1)
         scope = Scope.NODE
@@ -186,6 +261,7 @@ def cmd_add(args, cfg: Config) -> int:
         ),
         why=args.message,
         source=adapter.canonical_source(new_src, new_target),
+        source_lang=_lang_for(rel),
         history=[
             f"{datetime.date.today().isoformat()} - initial keystone. "
             f"{_git_author(cfg.repo_root)}"
@@ -282,9 +358,17 @@ def build_parser() -> argparse.ArgumentParser:
     fix.add_argument("--id", help="only this keystone")
     fix.set_defaults(func=cmd_fix)
 
-    add = sub.add_parser("add", help="write a marker and its sidecar entry")
+    add = sub.add_parser(
+        "add",
+        help="write a marker and its sidecar entry, or adopt an existing marker",
+    )
     add.add_argument(
-        "target", help="path/to/file.py::QualName, or path/to/file.py for file scope"
+        "target",
+        nargs="?",
+        help=(
+            "path/to/file.py::QualName, or path/to/file.py for file scope. "
+            "Omit it to adopt a marker already written into the source."
+        ),
     )
     add.add_argument("--id", required=True)
     add.add_argument("--category", default="default")

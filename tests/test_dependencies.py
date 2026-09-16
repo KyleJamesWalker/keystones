@@ -98,3 +98,20 @@ def test_no_dependencies_is_a_stable_empty_hash(tmp_path):
 def test_malformed_spec_raises(tmp_path):
     with pytest.raises(dependencies.UnresolvedDependency, match="expected path"):
         dependencies.combined_hash(tmp_path, ["no-separator"])
+
+
+def test_absent_depends_hash_compares_equal_to_the_empty_hash(repo, run_cli):
+    """A no-dependency entry stores no depends_hash; that must not read as drift."""
+    run_cli(
+        "add",
+        "billing/payout.py::compute_payout",
+        "--id",
+        "plain",
+        "--category",
+        "finance",
+        "-m",
+        "why.",
+    )
+    path = repo / "billing" / "payout.py"
+    path.write_text("# a new leading comment\n" + path.read_text())
+    assert run_cli("fix") == 0, "a pure move must not demand a note"
