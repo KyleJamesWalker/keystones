@@ -96,16 +96,6 @@ def test_deregistering_a_category_fails(repo, run_cli, based):
 
 
 def test_adding_a_keystone_is_not_a_removal(repo, run_cli, based):
-    run_cli(
-        "add",
-        f"{PAYOUT}::compute_payout".replace("compute_payout", "compute_payout"),
-        "--id",
-        "second",
-        "--category",
-        "default",
-        "-m",
-        "another.",
-    ) if False else None
     (repo / "billing" / "fees.py").write_text("def compute_fee(x):\n    return x * 2\n")
     run_cli(
         "add", "billing/fees.py::compute_fee", "--id", "fee-calc", "-m", "Fee basis."
