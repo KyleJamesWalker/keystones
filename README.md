@@ -182,6 +182,13 @@ tree-sitter languages need the `all` extra. Grammars are pinned exactly and the
 grammar version is part of the stored hasher id, so a grammar bump is reported
 as a hasher mismatch rather than as code drift.
 
+`keystones migrate` then moves those entries across, and proves the move rather
+than asserting it: the stored canonical source is re-rendered under the new
+hasher, and only when that matches the new hash of the live code does the entry
+migrate, with no note and no owner review. Where the code changed too, the entry
+is left alone for the normal gate. A hasher version is a wire format; versions
+are never removed.
+
 Separator tokens (`,` and `;`) are excluded from the hash, because a formatter
 adds a trailing comma whenever it wraps arguments and ASI makes semicolons
 optional. Operators are not excluded: `a + b` and `a - b` do not collide.
@@ -193,7 +200,7 @@ Phase 2 in progress.
 | Shipped | Not yet |
 |---|---|
 | C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness | call-closure advisory, CI-written `reviewed_by` |
-| `check`, `fix`, `add`, `doctor`, `list`, `index` | `migrate` for hasher and grammar bumps |
+| `check`, `fix`, `add`, `doctor`, `list`, `index`, `migrate` | call-closure advisory, CI-written `reviewed_by` |
 
 The hasher is versioned (`keystones-ast/1`) and treated as a wire format. A
 pinned-hash test runs on every supported CPython minor, because a hash basis

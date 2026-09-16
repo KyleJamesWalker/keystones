@@ -288,6 +288,46 @@ def cmd_doctor(args, cfg: Config) -> int:
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
 
 
+def cmd_migrate(args, cfg: Config) -> int:
+    from keystones import migrate as migrate_mod
+
+    resolved, _findings, _ = collect(cfg, None)
+    outcomes = migrate_mod.plan(cfg, resolved, _entries(cfg))
+    if not outcomes:
+        print("keystones: every entry is already on this install's hasher")
+        return 0
+
+    for outcome in outcomes:
+        state = (
+            "provably unchanged"
+            if outcome.proved
+            else f"needs review: {outcome.reason}"
+        )
+        print(
+            f"  {outcome.entry.id}: {outcome.old_hasher} -> "
+            f"{outcome.new_hasher} ({state})"
+        )
+
+    blocked = [o for o in outcomes if not o.proved]
+    if args.check:
+        print(
+            f"\nkeystones: {len(outcomes) - len(blocked)} migratable, "
+            f"{len(blocked)} blocked"
+        )
+        return 1 if blocked else 0
+
+    migrated = migrate_mod.apply(cfg, resolved, outcomes)
+    _write_index(cfg)
+    print(f"\nkeystones: migrated {migrated} entr(ies)")
+    if blocked:
+        print(
+            f"keystones: {len(blocked)} left alone; the code changed too, so they need "
+            '`keystones fix -m "<why>"` and their owner',
+        )
+        return 1
+    return 0
+
+
 def cmd_list(args, cfg: Config) -> int:
     from keystones.staleness import DurationError, age, humanize, parse_duration
 
@@ -388,6 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
     doc.add_argument("--required-check", default="keystones")
     doc.add_argument("--format", choices=("plain", "github"), default="plain")
     doc.set_defaults(func=cmd_doctor)
+
+    mig = sub.add_parser(
+        "migrate", help="move entries onto this install's hasher, where provable"
+    )
+    mig.add_argument("--check", action="store_true", help="report without writing")
+    mig.set_defaults(func=cmd_migrate)
 
     listing = sub.add_parser("list", help="show every keystone")
     listing.add_argument("--category")
