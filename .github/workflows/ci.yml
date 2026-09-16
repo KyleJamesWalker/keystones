@@ -39,5 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # C9 compares against the merge base, which needs real history.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
       - run: uv run keystones check --all --format github

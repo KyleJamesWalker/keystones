@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from keystones import adapters, sidecar
+from keystones import adapters, gitref, sidecar
 from keystones.checks import run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect
@@ -44,9 +44,23 @@ def _entries(cfg: Config) -> list[Entry]:
 def cmd_check(args, cfg: Config) -> int:
     paths = None if args.all else (args.paths or None)
     scoped = paths is not None
+    base = None
+    if not scoped:
+        base = gitref.resolve_base(cfg.repo_root, args.base)
+        if base is None and not args.no_base:
+            print(
+                "keystones: no base ref available, skipping C9 (removal check). "
+                "Pass --base <ref>, or --no-base to silence this.",
+                file=sys.stderr,
+            )
     resolved, findings = collect(cfg, paths)
     findings = findings + run_all(
-        cfg, resolved, _entries(cfg), scoped=scoped, warn_only=args.warn_only
+        cfg,
+        resolved,
+        _entries(cfg),
+        scoped=scoped,
+        warn_only=args.warn_only,
+        base=base,
     )
     _report(findings, args.format)
     errors = [f for f in findings if f.severity is Severity.ERROR]
@@ -207,6 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--warn-only", action="store_true", help="report drift without failing"
     )
     check.add_argument("--format", choices=("plain", "github"), default="plain")
+    check.add_argument("--base", help="ref to compare against for C9; inferred in CI")
+    check.add_argument(
+        "--no-base", action="store_true", help="skip C9 without a notice"
+    )
     check.set_defaults(func=cmd_check)
 
     fix = sub.add_parser("fix", help="update hashes, source and history")

@@ -188,6 +188,18 @@ def c10_index(cfg: Config, entries: dict[str, Entry]) -> list[Finding]:
     return []
 
 
+def c9_removed(
+    cfg: Config, resolved: list[Resolved], entry_list: list[Entry], base: str
+) -> list[Finding]:
+    from keystones import gitref
+    from keystones.removal import c9_removals, inventory_at, inventory_head
+
+    point = gitref.merge_base(cfg.repo_root, base) or base
+    return c9_removals(
+        inventory_at(cfg.repo_root, point), inventory_head(cfg, resolved, entry_list)
+    )
+
+
 def run_all(
     cfg: Config,
     resolved: list[Resolved],
@@ -195,6 +207,7 @@ def run_all(
     *,
     scoped: bool = False,
     warn_only: bool = False,
+    base: str | None = None,
 ) -> list[Finding]:
     """`scoped` means only some files were seen, so whole-repo checks are skipped."""
     entries = {entry.id: entry for entry in entry_list}
@@ -206,4 +219,6 @@ def run_all(
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
         findings += c10_index(cfg, entries)
+        if base:
+            findings += c9_removed(cfg, resolved, entry_list, base)
     return findings
