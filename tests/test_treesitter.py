@@ -211,3 +211,56 @@ def test_a_grammar_mismatch_that_disagrees_is_c13_not_drift(repo, run_cli, capsy
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
     assert "[C13]" in err and "[C3]" not in err
+
+
+# Pinned under the grammar pack the dev group installs. A change here means a
+# grammar moved, which shifts every stored hash in every consuming repo, so it
+# is a SERIALIZER_VERSION decision and a migration, never a test edit.
+PINNED_BY_LANGUAGE = {
+    "typescript": (
+        "app.ts",
+        "// keystone: k\n"
+        "export function computePayout(amount: number): number {\n"
+        "  const rate = 1.07;\n"
+        "  return Math.round(amount * rate * 100) / 100;\n"
+        "}\n",
+        "sha256:cb695dc29a66ae2412e88935ed520831f1408d50b112dfdef45e72c43cc06dfa",
+    ),
+    "go": (
+        "m.go",
+        "// keystone: k\nfunc ComputePayout(a float64) float64 {\n"
+        "\treturn a * 1.07\n}\n",
+        "sha256:91b4790c8ccaccbc31142dd67b624a6b245b05e09e0286a7ed84875e9e4de317",
+    ),
+    "hcl": (
+        "m.tf",
+        "# keystone: k\n"
+        'resource "google_compute_network_peering" "prod" {\n'
+        "  peer_network  = var.peer\n"
+        "  export_routes = true\n"
+        "}\n",
+        "sha256:5521957ec081e77753bd920b7949006e9488c559d9ebcabbf99b9f24edc206a2",
+    ),
+}
+
+
+@pytest.mark.parametrize("language", sorted(PINNED_BY_LANGUAGE))
+def test_grammar_output_is_pinned(language):
+    """The tree-sitter counterpart of the Python canary.
+
+    Without this a grammar change is only caught when it happens to break a
+    node-type assumption somewhere else, which is not the same as noticing that
+    every stored hash just moved.
+    """
+    path, src, expected = PINNED_BY_LANGUAGE[language]
+    marker = ts.markers(path, src)[0]
+    assert ts.hashes(src, ts.resolve(src, marker))[0] == expected
+
+
+def test_the_pinned_pack_is_the_one_under_test():
+    """A canary is only evidence if you know which grammar produced it."""
+    from importlib.metadata import version
+
+    assert ts.hasher_id_for_path("app.ts").endswith(
+        f"@{version('tree-sitter-language-pack')}"
+    )
