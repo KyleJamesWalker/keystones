@@ -220,3 +220,6 @@ __marimo__/
 # keystones
 .venv/
 uv.lock
+
+# hatch-vcs generated
+src/keystones/_version.py
