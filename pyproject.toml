@@ -38,7 +38,13 @@ Issues = "https://github.com/KyleJamesWalker/keystones/issues"
 keystones = "keystones.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff==0.16.8", "tree-sitter==0.26.0", "tree-sitter-language-pack==1.20.0"]
+dev = [
+    "pytest>=8",
+    "pre-commit>=4",
+    "ruff==0.16.8",
+    "tree-sitter==0.26.0",
+    "tree-sitter-language-pack==1.20.0",
+]
 
 [tool.hatch.version]
 source = "vcs"

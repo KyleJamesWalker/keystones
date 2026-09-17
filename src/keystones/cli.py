@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,15 @@ def _git_author(repo_root: Path) -> str:
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+
+
+def _default_format() -> str:
+    """Annotations when a runner will render them, plain text otherwise.
+
+    The hooks are shared between CI and a developer's machine, so the format
+    cannot be a flag in the hook entry.
+    """
+    return "github" if os.environ.get("GITHUB_ACTIONS") == "true" else "plain"
 
 
 def _report(findings, fmt: str) -> None:
@@ -63,7 +73,7 @@ def cmd_check(args, cfg: Config) -> int:
         base=base,
         skipped=skipped,
     )
-    _report(findings, args.format)
+    _report(findings, args.format or _default_format())
     errors = [f for f in findings if f.severity is Severity.ERROR]
     if not findings:
         print(f"keystones: {len(resolved)} keystone(s) verified")
@@ -282,7 +292,7 @@ def cmd_doctor(args, cfg: Config) -> int:
     except doctor.Unavailable as exc:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0
-    _report(findings, args.format)
+    _report(findings, args.format or _default_format())
     if not findings:
         print("keystones doctor: branch protection requires owner review")
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
@@ -385,7 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--warn-only", action="store_true", help="report drift without failing"
     )
-    check.add_argument("--format", choices=("plain", "github"), default="plain")
+    check.add_argument("--format", choices=("plain", "github"), default=None)
     check.add_argument("--base", help="ref to compare against for C9; inferred in CI")
     check.add_argument(
         "--no-base", action="store_true", help="skip C9 without a notice"
@@ -426,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="verify branch protection actually enforces review"
     )
     doc.add_argument("--required-check", default="keystones")
-    doc.add_argument("--format", choices=("plain", "github"), default="plain")
+    doc.add_argument("--format", choices=("plain", "github"), default=None)
     doc.set_defaults(func=cmd_doctor)
 
     mig = sub.add_parser(

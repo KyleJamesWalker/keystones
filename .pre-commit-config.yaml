@@ -25,6 +25,8 @@ repos:
         entry: uv run keystones check --warn-only
         language: system
         types: [python]
+        # Local feedback only. CI runs the whole-repo hook below instead.
+        stages: [pre-commit]
         verbose: true
       - id: keystones-all
         name: keystones
@@ -33,3 +35,10 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push, manual]
+      - id: keystones-doctor
+        name: keystones doctor
+        entry: uv run keystones doctor
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
