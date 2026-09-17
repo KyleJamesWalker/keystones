@@ -6,6 +6,7 @@ and phase 1 stays dependency-free.
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -14,11 +15,41 @@ from keystones.models import Entry
 
 _META_RE = re.compile(r"^```toml\n(.*?)^```\n", re.DOTALL | re.MULTILINE)
 _SECTION_RE = re.compile(r"^## (.+?)\n(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE)
-_CODE_RE = re.compile(r"^```(\w*)\n(.*?)^```", re.DOTALL | re.MULTILINE)
+_CODE_RE = re.compile(r"^(`{3,})(\w*)\n(.*?)^\1", re.DOTALL | re.MULTILINE)
 
 
 class SidecarError(Exception):
     pass
+
+
+def _split_sections(raw: str) -> dict[str, str]:
+    """Split on `## ` headings, ignoring anything inside a fenced block.
+
+    The stored source is arbitrary text and routinely contains both.
+    """
+    sections: dict[str, str] = {}
+    name: str | None = None
+    body: list[str] = []
+    fence: str | None = None
+    for line in raw.splitlines():
+        stripped = line.lstrip()
+        if fence is None:
+            match = re.match(r"(`{3,})", stripped)
+            if match:
+                fence = match.group(1)
+        elif stripped.startswith(fence) and stripped.strip("`") == "":
+            fence = None
+        if fence is None and line.startswith("## "):
+            if name is not None:
+                sections[name] = "\n".join(body)
+            name = line[3:].strip().lower()
+            body = []
+            continue
+        if name is not None:
+            body.append(line)
+    if name is not None:
+        sections[name] = "\n".join(body)
+    return sections
 
 
 def parse(path: Path, category: str) -> Entry:
@@ -28,15 +59,15 @@ def parse(path: Path, category: str) -> Entry:
         raise SidecarError(f"{path}: no ```toml metadata block")
     meta = tomllib.loads(meta_match.group(1))
 
-    sections = {name.strip().lower(): body for name, body in _SECTION_RE.findall(raw)}
+    sections = _split_sections(raw)
     why = sections.get("why", "").strip()
 
     source, source_lang = "", "python"
     if "canonical source" in sections:
         code_match = _CODE_RE.search(sections["canonical source"])
         if code_match:
-            source_lang = code_match.group(1) or "python"
-            source = code_match.group(2).rstrip("\n")
+            source_lang = code_match.group(2) or ""
+            source = code_match.group(3).rstrip("\n")
 
     history = [
         line.strip()[2:].strip()
@@ -67,10 +98,12 @@ def parse(path: Path, category: str) -> Entry:
 
 
 def _toml_value(value: object) -> str:
+    # json.dumps escapes quotes and backslashes correctly; writing them raw
+    # produces a sidecar that tomllib rejects.
     if isinstance(value, list):
-        items = ", ".join(f'"{item}"' for item in value)
+        items = ", ".join(json.dumps(str(item)) for item in value)
         return f"[{items}]"
-    return f'"{value}"'
+    return json.dumps(str(value))
 
 
 def render(entry: Entry) -> str:
@@ -88,15 +121,22 @@ def render(entry: Entry) -> str:
 
     lines = [f"# {entry.id}", "", "```toml"]
     lines += [f"{key} = {_toml_value(value)}" for key, value in meta.items()]
+    # A payload carrying its own fence would close the block early, and C5
+    # would then report the entry as hand-edited forever.
+    longest = max(
+        (len(m) for m in re.findall(r"^`{3,}", entry.source, re.M)), default=0
+    )
+    fence = "`" * max(3, longest + 1)
+
     lines += ["```", "", "## Why", ""]
     lines.append(entry.why.strip() or "TODO: why is this load-bearing?")
     lines += [
         "",
         "## Canonical source",
         "",
-        f"```{entry.source_lang}",
+        f"{fence}{entry.source_lang}",
         entry.source,
-        "```",
+        fence,
         "",
     ]
     lines += ["## History", ""]

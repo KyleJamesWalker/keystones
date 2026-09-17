@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from keystones import adapters, dependencies, gitref, sidecar
+from keystones import markers as marker_grammar
 from keystones.checks import run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect
@@ -55,9 +56,9 @@ def cmd_check(args, cfg: Config) -> int:
     paths = None if args.all else (args.paths or None)
     scoped = paths is not None
     base = None
-    if not scoped:
+    if not scoped and not args.no_base:
         base = gitref.resolve_base(cfg.repo_root, args.base)
-        if base is None and not args.no_base:
+        if base is None:
             print(
                 "keystones: no base ref available, skipping C9 (removal check). "
                 "Pass --base <ref>, or --no-base to silence this.",
@@ -115,7 +116,19 @@ def cmd_fix(args, cfg: Config) -> int:
                 file=sys.stderr,
             )
             return 1
-        if target_str != entry.target and not semantic_changed:
+        moved_file = (
+            target_str.split("::")[0].split("#")[0]
+            != entry.target.split("::")[0].split("#")[0]
+        )
+        if moved_file and not args.message:
+            # Moving a marker to another file is how a decoy gets adopted, so
+            # it is never note-free even when the hash is unchanged.
+            print(
+                f"keystones: '{entry.id}' moved to a different file; -m is required",
+                file=sys.stderr,
+            )
+            return 1
+        if target_str != entry.target and not semantic_changed and not args.message:
             entry.history.insert(0, f"{today} - moved to {target_str}. {author}")
         elif args.message:
             entry.history.insert(0, f"{today} - {args.message} {author}")
@@ -183,6 +196,11 @@ def _adopt(args, cfg: Config) -> int:
     src = (cfg.repo_root / item.marker.path).read_text()
     semantic, text_digest = item.adapter.hashes(src, item.target)
     depends = list(args.depends or [])
+    try:
+        depends_hash = dependencies.combined_hash(cfg.repo_root, depends)
+    except dependencies.UnresolvedDependency as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
     entry = Entry(
         id=args.id,
         category=category,
@@ -192,7 +210,7 @@ def _adopt(args, cfg: Config) -> int:
         text=text_digest,
         review_every=args.review_every,
         depends=depends,
-        depends_hash=dependencies.combined_hash(cfg.repo_root, depends),
+        depends_hash=depends_hash,
         why=args.message,
         source=item.adapter.canonical_source(src, item.target),
         source_lang=_lang_for(item.marker.path),
@@ -207,6 +225,22 @@ def _adopt(args, cfg: Config) -> int:
     return 0
 
 
+def _file_scope_insert_line(src: str) -> int:
+    """First line a comment may go on without breaking the file.
+
+    A shebang has to stay on line 1 and a PEP 263 coding cookie within the first
+    two, so a file-scope marker cannot simply be prepended.
+    """
+    lines = src.splitlines()
+    at = 1
+    if lines and lines[0].startswith("#!"):
+        at = 2
+    for index in range(at - 1, min(2, len(lines))):
+        if "coding" in lines[index] and lines[index].lstrip().startswith("#"):
+            at = index + 2
+    return at
+
+
 def cmd_add(args, cfg: Config) -> int:
     if args.target is None:
         return _adopt(args, cfg)
@@ -215,6 +249,14 @@ def cmd_add(args, cfg: Config) -> int:
         scope = Scope.NODE
     else:
         rel, qualname, scope = args.target, None, Scope.FILE
+
+    if not marker_grammar.ID_RE.match(args.id):
+        print(
+            f"keystones: '{args.id}' is not a usable id; use letters, digits, "
+            "dot, dash or underscore",
+            file=sys.stderr,
+        )
+        return 1
 
     path = cfg.repo_root / rel
     if not path.is_file():
@@ -236,7 +278,7 @@ def cmd_add(args, cfg: Config) -> int:
     src = path.read_text()
     if scope is Scope.FILE:
         target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
-        insert_at, indent = 1, ""
+        insert_at, indent = _file_scope_insert_line(src), ""
     else:
         target = adapter.target_for_qualname(rel, src, qualname)
         if target is None:
@@ -246,9 +288,19 @@ def cmd_add(args, cfg: Config) -> int:
         insert_at = target.start
         indent = first[: len(first) - len(first.lstrip())]
 
+    try:
+        # Resolved before the file is touched: an unresolvable spec used to
+        # leave a marker in the source with no sidecar behind it.
+        depends = list(args.depends or [])
+        depends_hash = dependencies.combined_hash(cfg.repo_root, depends)
+    except dependencies.UnresolvedDependency as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
+
+    leader = adapter.comment_prefix(rel)
     keyword = "keystone" if args.category == "default" else f"keystone({args.category})"
     lines = src.splitlines(keepends=True)
-    lines.insert(insert_at - 1, f"{indent}# {keyword}: {args.id}\n")
+    lines.insert(insert_at - 1, f"{indent}{leader} {keyword}: {args.id}\n")
     path.write_text("".join(lines))
 
     new_src = path.read_text()
@@ -266,10 +318,8 @@ def cmd_add(args, cfg: Config) -> int:
         semantic=semantic,
         text=text,
         review_every=args.review_every,
-        depends=list(args.depends or []),
-        depends_hash=dependencies.combined_hash(
-            cfg.repo_root, list(args.depends or [])
-        ),
+        depends=depends,
+        depends_hash=depends_hash,
         why=args.message,
         source=adapter.canonical_source(new_src, new_target),
         source_lang=_lang_for(rel),
@@ -398,7 +448,9 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--format", choices=("plain", "github"), default=None)
     check.add_argument("--base", help="ref to compare against for C9; inferred in CI")
     check.add_argument(
-        "--no-base", action="store_true", help="skip C9 without a notice"
+        "--no-base",
+        action="store_true",
+        help="skip the removal check entirely, and say nothing about it",
     )
     check.set_defaults(func=cmd_check)
 

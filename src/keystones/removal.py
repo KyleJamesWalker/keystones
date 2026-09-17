@@ -10,11 +10,10 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from keystones import adapters, gitref
-from keystones.adapters.base import ResolutionError
-from keystones.config import DEFAULT_EXCLUDES, Config
+from keystones.config import DEFAULT_EXCLUDE_DIRS, Config
 from keystones.models import Finding, Severity
 
 
@@ -27,7 +26,14 @@ class Inventory:
     exclude: tuple[str, ...] = ()
 
     def excludes(self, rel_path: str) -> bool:
-        return any(fnmatch(rel_path, pat) for pat in DEFAULT_EXCLUDES + self.exclude)
+        parts = PurePosixPath(rel_path).parts
+        if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+            return True
+        return any(
+            fnmatch(rel_path, pat)
+            or (pat.startswith("**/") and fnmatch(rel_path, pat[3:]))
+            for pat in self.exclude
+        )
 
 
 def _config_at(
@@ -65,7 +71,9 @@ def inventory_at(repo_root: Path, ref: str) -> Inventory:
             continue
         try:
             found = adapter.markers(rel, src)
-        except (SyntaxError, ResolutionError):
+        except Exception:
+            # The base ref is history; a file that no longer parses there
+            # tells us nothing and must not fail the current check.
             continue
         for marker in found:
             inv.markers[marker.id] = marker.category

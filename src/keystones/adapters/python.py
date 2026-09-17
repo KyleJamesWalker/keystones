@@ -40,6 +40,8 @@ def markers(path: str, src: str) -> list[Marker]:
     That matters for regions too: a test fixture holding an example region in a
     triple-quoted string must not register one.
     """
+    if marker_grammar.is_ignored(src):
+        return []
     found = [
         m
         for m in marker_grammar.scan_lines(path, src, _comments(src))[0]
@@ -58,8 +60,7 @@ def _marker_lines(src: str) -> set[int]:
     return {
         tok.start[0]
         for tok in _tokens(src)
-        if tok.type == tokenize.COMMENT
-        and marker_grammar.looks_like_a_marker(tok.string)
+        if tok.type == tokenize.COMMENT and marker_grammar.is_marker(tok.string)
     }
 
 
@@ -184,8 +185,11 @@ def hash_stored_source(source: str, target: str) -> str:
     if "#L" in target:
         return fallback.hash_stored_source(source, target)
     tree = ast.parse(source)
-    node = tree if "::" not in target else tree.body[0]
-    return semantic_hash(node)
+    if "::" not in target:
+        return semantic_hash(tree)
+    if not tree.body:
+        raise ResolutionError(f"{target}: stored source contains no definition")
+    return semantic_hash(tree.body[0])
 
 
 def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
@@ -221,3 +225,22 @@ def render_symbol(src: str, symbol: str) -> str | None:
 
 def hasher_id_for_path(path: str) -> str:
     return HASHER_ID
+
+
+def duplicate_qualnames(path: str, src: str) -> set[str]:
+    """Qualnames defined more than once in one file.
+
+    Resolution picks the first, so a second definition of the same name lets a
+    hash-identical decoy sit under the marker while the live one is rewritten.
+    """
+    seen: set[str] = set()
+    dupes: set[str] = set()
+    for qualname, _ in _definitions(ast.parse(src)):
+        if qualname in seen:
+            dupes.add(qualname)
+        seen.add(qualname)
+    return dupes
+
+
+def comment_prefix(path: str) -> str:
+    return "#"

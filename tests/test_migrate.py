@@ -38,11 +38,18 @@ def test_nothing_to_do_on_a_current_repo(migrated_repo, run_cli):
     assert run_cli("migrate") == 0
 
 
-def test_a_hasher_bump_warns_rather_than_reporting_drift(migrated_repo, run_cli):
+def test_an_unverifiable_hasher_fails_but_not_as_drift(migrated_repo, run_cli, capsys):
+    """It must fail: skipping C3/C4/C5 on an unknown hasher is a kill switch.
+
+    It must not fail as C3, because the code may be untouched and sending someone
+    to `fix` would rubber-stamp a review that never happened.
+    """
     set_hasher(migrated_repo, "keystones-ast/0")
-    assert run_cli("check", "--all", "--no-base") == 0, (
-        "C13 is a warning, not a failure"
-    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C13]" in err
+    assert "[C3]" not in err
+    assert "migrate" in err
 
 
 def test_unchanged_code_migrates_with_no_note_and_no_review(migrated_repo, run_cli):

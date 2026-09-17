@@ -15,6 +15,7 @@ _OPENER = r"(?:#|//|--|/\*|<!--|;|%|\*)"
 
 _QUALIFIERS = r"(?:\(\s*(?P<qualifiers>[^)]*?)\s*\))?"
 _ID = r"(?P<id>[A-Za-z0-9][A-Za-z0-9._-]*)"
+ID_RE = re.compile(rf"^{_ID}$")
 
 POINT_RE = re.compile(
     rf"{_OPENER}\s*keystone{_QUALIFIERS}\s*:\s*{_ID}\s*(?:\*/|-->)?\s*$"
@@ -34,6 +35,20 @@ IGNORE_RE = re.compile(r"keystones:\s*ignore-file")
 def looks_like_a_marker(text: str) -> bool:
     """Cheap pre-filter so whole-repo scanning does not parse every file."""
     return ANY in text
+
+
+def is_marker(text: str) -> bool:
+    """An actual marker, not merely a comment that mentions one.
+
+    The text hash excludes marker lines. Excluding everything containing the
+    word would let `# keystone rounding rule, do not touch` be deleted with
+    the gate green.
+    """
+    return (
+        POINT_RE.search(text) is not None
+        or START_RE.search(text) is not None
+        or END_RE.search(text) is not None
+    )
 
 
 def _split(qualifiers: str | None) -> tuple[Scope, str]:

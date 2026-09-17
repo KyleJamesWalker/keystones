@@ -57,6 +57,7 @@ def c3_c4_hashes(
     warn_only: bool = False,
 ) -> list[Finding]:
     out = []
+    severity = Severity.WARNING if warn_only else Severity.ERROR
     for item in resolved:
         entry = entries.get(item.marker.id)
         if entry is None:
@@ -64,15 +65,33 @@ def c3_c4_hashes(
         expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
         if entry.hasher and entry.hasher != expected_hasher:
             continue
-        src = (cfg.repo_root / item.marker.path).read_text()
+        src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
         semantic, text = item.adapter.hashes(src, item.target)
-        if semantic != entry.semantic:
+        target = str(item.target)
+        fix_hint = f'run `keystones fix --id {entry.id} -m "<why it changed>"`'
+
+        # Without this the marker can be moved onto a hash-identical decoy while
+        # the real definition is rewritten, and every other check stays green.
+        if target != entry.target:
             out.append(
                 Finding(
                     "C3",
-                    Severity.WARNING if warn_only else Severity.ERROR,
-                    f"keystone '{entry.id}' changed. Its owner must review "
-                    f'this. run `keystones fix --id {entry.id} -m "<why it changed>"`',
+                    severity,
+                    f"keystone '{entry.id}' no longer covers {entry.target}; its "
+                    f"marker now sits on {target}. Whatever that entry protected "
+                    f"may no longer be protected. {fix_hint}",
+                    item.marker.path,
+                    item.marker.lineno,
+                    owner_hint=entry.category,
+                )
+            )
+        elif semantic != entry.semantic:
+            out.append(
+                Finding(
+                    "C3",
+                    severity,
+                    f"keystone '{entry.id}' changed. Its owner must review this. "
+                    f"{fix_hint}",
                     item.marker.path,
                     item.marker.lineno,
                     owner_hint=entry.category,
@@ -82,9 +101,8 @@ def c3_c4_hashes(
             out.append(
                 Finding(
                     "C4",
-                    Severity.WARNING if warn_only else Severity.ERROR,
-                    f"comments inside keystone '{entry.id}' changed. "
-                    f'run `keystones fix --id {entry.id} -m "<why it changed>"`',
+                    severity,
+                    f"comments inside keystone '{entry.id}' changed. {fix_hint}",
                     item.marker.path,
                     item.marker.lineno,
                 )
@@ -115,7 +133,7 @@ def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
             continue
         try:
             actual = adapter.hash_stored_source(entry.source, entry.target)
-        except SyntaxError as exc:
+        except Exception as exc:  # any adapter failure is a finding, not a crash
             out.append(
                 Finding(
                     "C5",
@@ -227,10 +245,12 @@ def run_all(
     findings = c1_orphan_markers(resolved, entries)
     findings += c3_c4_hashes(cfg, resolved, entries, warn_only=warn_only)
     findings += c7_categories(cfg, resolved)
+    findings += c7_category_agreement(resolved, entries)
     if not scoped:
         findings += c2_orphan_entries(resolved, entries, skipped)
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
+        findings += c6_shadowed_targets(cfg, resolved)
         findings += c8_ownership(cfg)
         findings += c11_dependencies(cfg, entry_list)
         findings += hasher_mismatch(cfg, entry_list)
@@ -366,11 +386,60 @@ def hasher_mismatch(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
             out.append(
                 Finding(
                     "C13",
-                    Severity.WARNING,
+                    Severity.ERROR,
                     f"keystone '{entry.id}' was hashed by {entry.hasher} but this "
-                    f"install uses {expected}. Its hash cannot be compared. Run "
-                    "`keystones migrate`, or install the matching extra.",
+                    f"install uses {expected}, so C3, C4 and C5 cannot verify "
+                    "it at all. Run `keystones migrate` to prove it across, or "
+                    "install the matching extra.",
                     entry.path,
+                )
+            )
+    return out
+
+
+def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
+    """A second definition of the same name lets a decoy sit under the marker.
+
+    Resolution takes the first match, so the protected function can be rewritten
+    below while a hash-identical copy keeps the gate green.
+    """
+    out = []
+    checked: set[str] = set()
+    for item in resolved:
+        if item.target.qualname is None or item.marker.path in checked:
+            continue
+        checked.add(item.marker.path)
+        src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
+        for qualname in sorted(item.adapter.duplicate_qualnames(item.marker.path, src)):
+            out.append(
+                Finding(
+                    "C6",
+                    Severity.ERROR,
+                    f"{item.marker.path} defines '{qualname}' more than once, so a "
+                    "keystone on it cannot say which one it protects",
+                    item.marker.path,
+                )
+            )
+    return out
+
+
+def c7_category_agreement(
+    resolved: list[Resolved], entries: dict[str, Entry]
+) -> list[Finding]:
+    """A mismatch means a different team reviews than the marker names."""
+    out = []
+    for item in resolved:
+        entry = entries.get(item.marker.id)
+        if entry is not None and entry.category != item.marker.category:
+            out.append(
+                Finding(
+                    "C7",
+                    Severity.ERROR,
+                    f"marker for '{entry.id}' says category "
+                    f"'{item.marker.category}' but its sidecar sits in "
+                    f"'{entry.category}', so a different team owns the review",
+                    item.marker.path,
+                    item.marker.lineno,
                 )
             )
     return out

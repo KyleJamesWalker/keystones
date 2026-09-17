@@ -114,6 +114,8 @@ The hash is taken over a canonical rendering of the AST node, not its text.
 | edit a docstring | needs owner review, docstrings are AST nodes |
 | change a symbol listed in `depends` | needs owner review |
 | delete the marker | fails until the entry goes too |
+| move the marker onto a different definition | fails; the entry records its target |
+| define the same name twice in one file | fails; the keystone cannot say which it covers |
 
 Markers are found by lexing, so a marker-shaped string literal is not a marker.
 A marker above a decorator attaches to the function it decorates.
@@ -132,8 +134,11 @@ CODEOWNERS-gated and the deletion is legible in the diff. Known gaps:
 - **CODEOWNERS is not self-executing.** It requests a reviewer. The block only
   exists when branch protection requires Code Owner review and dismisses stale
   approvals. `keystones doctor` audits that, and needs a token with
-  `admin:repo` to do it; it skips with a notice rather than failing when it
-  cannot look.
+  `admin:repo` to do it. With no token it skips; with a token it cannot use, it
+  fails rather than reporting success it cannot vouch for.
+- **A keystone protects one definition, not a name.** It records the target it
+  covers and fails if the marker moves off it, but nothing stops a caller being
+  repointed at different code entirely.
 
 ## Any file type
 
@@ -182,16 +187,22 @@ tree-sitter languages need the `all` extra. Grammars are pinned exactly and the
 grammar version is part of the stored hasher id, so a grammar bump is reported
 as a hasher mismatch rather than as code drift.
 
-`keystones migrate` then moves those entries across, and proves the move rather
+An entry this install cannot verify is an error, not a warning: skipping the
+hash checks on an unrecognised hasher would make that field a way to switch
+them off. `keystones migrate` then moves those entries across, and proves the
+move rather
 than asserting it: the stored canonical source is re-rendered under the new
 hasher, and only when that matches the new hash of the live code does the entry
 migrate, with no note and no owner review. Where the code changed too, the entry
 is left alone for the normal gate. A hasher version is a wire format; versions
 are never removed.
 
-Separator tokens (`,` and `;`) are excluded from the hash, because a formatter
-adds a trailing comma whenever it wraps arguments and ASI makes semicolons
-optional. Operators are not excluded: `a + b` and `a - b` do not collide.
+For JavaScript and TypeScript the hash also folds away the things prettier
+changes on its own: quote style, number spelling (`1.50` and `1.5`), redundant
+parentheses, arrow-parameter parens, and a trailing separator. Operators and
+interior separators are kept, so `a + b` and `a - b` differ, and so do `[a,,b]`
+and `[a,b]`. The `export` keyword and a `const`/`let`/`var` binding are inside
+the hash, so un-exporting a symbol is a change.
 
 ## Status
 

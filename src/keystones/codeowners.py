@@ -52,8 +52,17 @@ def _compile(pattern: str) -> re.Pattern[str]:
         i += 1
 
     prefix = "" if (anchored or "/" in body) else "(?:.*/)?"
-    # A rule naming a directory owns everything beneath it.
-    suffix = "/.*" if directory else "(?:/.*)?$"
+    # A rule naming a directory owns everything beneath it. A rule whose last
+    # segment globs does not: GitHub matches `docs/*` against files directly
+    # in docs/ only, and treating it as recursive reports ownership that
+    # GitHub will not honour.
+    last_segment_globs = any(c in body.rsplit("/", 1)[-1] for c in "*?")
+    if directory:
+        suffix = "/.*"
+    elif last_segment_globs:
+        suffix = "$"
+    else:
+        suffix = "(?:/.*)?$"
     return re.compile(f"^{prefix}{''.join(out)}{suffix}")
 
 

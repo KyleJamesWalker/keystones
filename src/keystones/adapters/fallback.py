@@ -102,3 +102,12 @@ def hash_stored_source(source: str, target: str) -> str:
 
 def hasher_id_for_path(path: str) -> str:
     return HASHER_ID
+
+
+def duplicate_qualnames(path: str, src: str) -> set[str]:
+    """No definitions without a parser, so nothing can shadow."""
+    return set()
+
+
+def comment_prefix(path: str) -> str:
+    return "#"

@@ -102,12 +102,27 @@ def run(repo_root: Path, required_check: str = "keystones") -> list[Finding]:
             )
         )
         return findings
-    if status == 403:
-        raise Unavailable("the token cannot read branch protection (needs admin scope)")
-    if status != 200 or not isinstance(protection, dict):
-        raise Unavailable(
-            f"unexpected response reading branch protection: HTTP {status}"
+    if status in (401, 403):
+        # A token that was supplied but cannot read this is the case where a
+        # rotated secret would otherwise leave the audit green forever.
+        findings.append(
+            Finding(
+                "doctor",
+                Severity.ERROR,
+                f"cannot read branch protection: HTTP {status}. The token is "
+                "invalid or lacks admin scope, so this audit vouches for nothing.",
+            )
         )
+        return findings
+    if status != 200 or not isinstance(protection, dict):
+        findings.append(
+            Finding(
+                "doctor",
+                Severity.ERROR,
+                f"unexpected response reading branch protection: HTTP {status}",
+            )
+        )
+        return findings
 
     reviews = protection.get("required_pull_request_reviews")
     if not reviews:

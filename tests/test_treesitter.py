@@ -137,8 +137,8 @@ def test_marker_attached_to_nothing_is_an_error():
 
 
 def test_hasher_id_carries_language_and_grammar_version():
-    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/1+typescript@")
-    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/1+hcl@")
+    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/2+typescript@")
+    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/2+hcl@")
     assert ts.hasher_id_for_path("app.ts") != ts.hasher_id_for_path("ledger.go")
 
 
@@ -191,12 +191,14 @@ def test_end_to_end_through_the_cli(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
 
 
-def test_a_hasher_mismatch_warns_rather_than_reading_as_drift(repo, run_cli):
-    """A different grammar version says nothing about whether code changed."""
+def test_a_grammar_mismatch_fails_but_not_as_drift(repo, run_cli, capsys):
+    """A different grammar version says nothing about whether the code changed."""
     (repo / "app.ts").write_text(TS_SRC)
     run_cli("add", "--id", "payout-rounding", "-m", "Rounding contract.")
     sidecar = repo / "keystones" / "finance" / "payout-rounding.md"
     sidecar.write_text(
         sidecar.read_text().replace("@1.20.0", "@0.0.1").replace("@1.", "@0.")
     )
-    assert run_cli("check", "--all", "--no-base") == 0, "a warning, not a failure"
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C13]" in err and "[C3]" not in err

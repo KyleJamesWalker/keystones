@@ -5,14 +5,9 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-DEFAULT_EXCLUDES = (
-    "**/.git/**",
-    "**/node_modules/**",
-    "**/vendor/**",
-    "**/generated/**",
-)
+DEFAULT_EXCLUDE_DIRS = (".git", "node_modules", "vendor", "generated")
 
 
 @dataclass
@@ -37,8 +32,16 @@ class Config:
         return self.sidecar_root / "INDEX.md"
 
     def is_excluded(self, rel_path: str) -> bool:
-        patterns = DEFAULT_EXCLUDES + self.exclude
-        return any(fnmatch(rel_path, pat) for pat in patterns)
+        parts = PurePosixPath(rel_path).parts
+        if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+            return True
+        # fnmatch does not match `x/y` against `**/x/y`, and users write the
+        # `**/` form expecting it to cover the repo root as well.
+        return any(
+            fnmatch(rel_path, pat)
+            or (pat.startswith("**/") and fnmatch(rel_path, pat[3:]))
+            for pat in self.exclude
+        )
 
 
 class ConfigError(Exception):
