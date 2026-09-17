@@ -102,15 +102,19 @@ def run(repo_root: Path, required_check: str = "keystones") -> list[Finding]:
             )
         )
         return findings
-    if status in (401, 403):
+    if status == 403:
+        # A valid token without admin scope genuinely cannot look. The default
+        # GITHUB_TOKEN is always this, so failing here would fail every CI run.
+        raise Unavailable("the token cannot read branch protection (needs admin scope)")
+    if status == 401:
         # A token that was supplied but cannot read this is the case where a
         # rotated secret would otherwise leave the audit green forever.
         findings.append(
             Finding(
                 "doctor",
                 Severity.ERROR,
-                f"cannot read branch protection: HTTP {status}. The token is "
-                "invalid or lacks admin scope, so this audit vouches for nothing.",
+                f"the token was rejected: HTTP {status}. It is invalid or "
+                "expired, so this audit vouches for nothing.",
             )
         )
         return findings
