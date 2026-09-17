@@ -24,10 +24,13 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# Grammars feed the hash, so both are pinned exactly rather than floated.
+# A range, not a pin. Determinism comes from the grammar version recorded
+# in each sidecar, and from the consumer pinning its own hook environment;
+# pinning here only blocks installs when something else needs a different
+# tree-sitter.
 all = [
-    "tree-sitter==0.26.0",
-    "tree-sitter-language-pack==1.20.0",
+    "tree-sitter>=0.25,<1",
+    "tree-sitter-language-pack>=1.20,<2",
 ]
 
 [project.urls]

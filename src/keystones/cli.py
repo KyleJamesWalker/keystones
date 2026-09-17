@@ -99,6 +99,19 @@ def cmd_fix(args, cfg: Config) -> int:
         src = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(src, item.target)
         target_str = str(item.target)
+        current_hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        if entry.hasher and entry.hasher != current_hasher:
+            # Writing here would store a hash the rest of the repo cannot
+            # reproduce, and the next check would ask for another fix forever.
+            print(
+                f"keystones: '{entry.id}' was hashed by {entry.hasher} but "
+                f"this environment is {current_hasher}. Writing now would "
+                "store a hash nobody else reproduces. Install the version "
+                "this repo uses, or run `keystones migrate` if the move is "
+                "deliberate.",
+                file=sys.stderr,
+            )
+            return 1
         try:
             depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
         except dependencies.UnresolvedDependency as exc:

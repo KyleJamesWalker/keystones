@@ -63,8 +63,7 @@ def c3_c4_hashes(
         if entry is None:
             continue
         expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
-        if entry.hasher and entry.hasher != expected_hasher:
-            continue
+        rehashed = entry.hasher and entry.hasher != expected_hasher
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
         semantic, text = item.adapter.hashes(src, item.target)
         target = str(item.target)
@@ -85,13 +84,28 @@ def c3_c4_hashes(
                     owner_hint=entry.category,
                 )
             )
+        elif semantic != entry.semantic and rehashed:
+            out.append(
+                Finding(
+                    "C13",
+                    severity,
+                    f"keystone '{entry.id}' was hashed by {entry.hasher}, this "
+                    f"install uses {expected_hasher}, and the two disagree. "
+                    "Whether the code changed cannot be told from here. Run "
+                    "`keystones migrate --check`, or install the grammar "
+                    "version this repo pins.",
+                    item.marker.path,
+                    item.marker.lineno,
+                    owner_hint=entry.category,
+                )
+            )
         elif semantic != entry.semantic:
             out.append(
                 Finding(
                     "C3",
                     severity,
-                    f"keystone '{entry.id}' changed. Its owner must review this. "
-                    f"{fix_hint}",
+                    f"keystone '{entry.id}' changed. Its owner must review "
+                    f"this. {fix_hint}",
                     item.marker.path,
                     item.marker.lineno,
                     owner_hint=entry.category,
@@ -253,7 +267,6 @@ def run_all(
         findings += c6_shadowed_targets(cfg, resolved)
         findings += c8_ownership(cfg)
         findings += c11_dependencies(cfg, entry_list)
-        findings += hasher_mismatch(cfg, entry_list)
         findings += stale_report(cfg, entry_list)
         findings += c10_index(cfg, entries)
         if base:

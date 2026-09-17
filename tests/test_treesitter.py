@@ -191,14 +191,23 @@ def test_end_to_end_through_the_cli(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
 
 
-def test_a_grammar_mismatch_fails_but_not_as_drift(repo, run_cli, capsys):
+def test_a_grammar_bump_with_identical_output_is_silent(repo, run_cli):
+    """The common case: a pack bump whose grammar emits the same thing."""
+    (repo / "app.ts").write_text(TS_SRC)
+    run_cli("add", "--id", "payout-rounding", "-m", "Rounding contract.")
+    sidecar = repo / "keystones" / "finance" / "payout-rounding.md"
+    sidecar.write_text(sidecar.read_text().replace("@1.20.0", "@0.0.1"))
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_grammar_mismatch_that_disagrees_is_c13_not_drift(repo, run_cli, capsys):
     """A different grammar version says nothing about whether the code changed."""
     (repo / "app.ts").write_text(TS_SRC)
     run_cli("add", "--id", "payout-rounding", "-m", "Rounding contract.")
     sidecar = repo / "keystones" / "finance" / "payout-rounding.md"
-    sidecar.write_text(
-        sidecar.read_text().replace("@1.20.0", "@0.0.1").replace("@1.", "@0.")
-    )
+    sidecar.write_text(sidecar.read_text().replace("@1.20.0", "@0.0.1"))
+    path = repo / "app.ts"
+    path.write_text(path.read_text().replace("* 100) / 100", "* 1000) / 1000"))
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
     assert "[C13]" in err and "[C3]" not in err

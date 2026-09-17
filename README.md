@@ -28,7 +28,14 @@ repos:
     hooks:
       - id: keystones          # staged files, warns on drift
       - id: keystones-all      # whole repo, blocking
+        additional_dependencies: ["tree-sitter-language-pack==1.20.0"]
 ```
+
+**Pin the grammar pack in your own config, not via this package.** The hooks run
+in an environment pre-commit builds for them, so `additional_dependencies` fixes
+the grammar version for your repo without colliding with anything your project
+itself depends on, and without waiting for a keystones release to move it. The
+package declares a range; your repo decides the version.
 
 The local hook is advisory: `--no-verify` skips it. The gate is
 `keystones check --all` running in CI, which cannot be skipped. Put
@@ -183,9 +190,20 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | Terraform, HCL | block, region, file | yes, tree-sitter |
 | everything else | region, file | no, normalised text |
 
-tree-sitter languages need the `all` extra. Grammars are pinned exactly and the
-grammar version is part of the stored hasher id, so a grammar bump is reported
-as a hasher mismatch rather than as code drift.
+tree-sitter languages need the `all` extra, which declares a range rather than
+a pin. The grammar version is recorded in each entry's hasher id, and that, not
+the install requirement, is what makes hashes deterministic.
+
+A version difference is only reported when it actually matters. On a mismatch
+the hash is recomputed first: if it still reproduces, the grammar emits the same
+thing and nothing is said. Only when the two genuinely disagree does it surface,
+and then as a hasher mismatch rather than as code drift, because from there it
+is not possible to tell a moved basis from changed code.
+
+`keystones fix` refuses to write from an environment whose hasher differs from
+the one an entry records. Without that, running `fix` with the wrong grammar
+pack installed would store a hash CI cannot reproduce, and the next check would
+ask for another fix, forever.
 
 An entry this install cannot verify is an error, not a warning: skipping the
 hash checks on an unrecognised hasher would make that field a way to switch

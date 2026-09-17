@@ -38,13 +38,25 @@ def test_nothing_to_do_on_a_current_repo(migrated_repo, run_cli):
     assert run_cli("migrate") == 0
 
 
-def test_an_unverifiable_hasher_fails_but_not_as_drift(migrated_repo, run_cli, capsys):
-    """It must fail: skipping C3/C4/C5 on an unknown hasher is a kill switch.
+def test_a_hasher_bump_with_identical_output_is_silent(migrated_repo, run_cli):
+    """A grammar or serializer bump that changes nothing must not churn.
 
-    It must not fail as C3, because the code may be untouched and sending someone
-    to `fix` would rubber-stamp a review that never happened.
+    The recorded hasher differs but the hash still reproduces, which proves the
+    code is unchanged, so there is nothing for anyone to review.
     """
     set_hasher(migrated_repo, "keystones-ast/0")
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_hasher_bump_that_disagrees_is_c13_not_c3(migrated_repo, run_cli, capsys):
+    """Once the hashes disagree, the cause is unknowable from here.
+
+    Reporting it as C3 would send someone to `fix`, rubber-stamping a review
+    that never happened; the hash may differ only because the basis moved.
+    """
+    set_hasher(migrated_repo, "keystones-ast/0")
+    source = migrated_repo / PAYOUT
+    source.write_text(source.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
     assert "[C13]" in err
@@ -105,3 +117,23 @@ def test_an_entry_whose_marker_is_gone_is_reported_not_migrated(migrated_repo, r
     source = migrated_repo / PAYOUT
     source.write_text(source.read_text().replace("# keystone(finance): r\n", ""))
     assert run_cli("migrate") == 1
+
+
+def test_fix_refuses_to_write_from_a_mismatched_environment(
+    migrated_repo, run_cli, capsys
+):
+    """The loop this prevents: fix writes a hash CI cannot reproduce.
+
+    With the wrong grammar pack installed, `fix` would store its own hash, the
+    next check would disagree and ask for another fix, forever, with nothing
+    saying the environment is the cause.
+    """
+    set_hasher(migrated_repo, "keystones-ast/0")
+    source = migrated_repo / PAYOUT
+    source.write_text(source.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+
+    assert run_cli("fix", "-m", "rounding policy change.") == 1
+    err = capsys.readouterr().err
+    assert "keystones-ast/0" in err and "keystones-ast/1" in err
+    assert "migrate" in err
+    assert 'hasher = "keystones-ast/0"' in sidecar_path(migrated_repo).read_text()
