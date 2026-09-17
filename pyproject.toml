@@ -40,6 +40,9 @@ Issues = "https://github.com/KyleJamesWalker/keystones/issues"
 [project.scripts]
 keystones = "keystones.cli:main"
 
+# Pinned exactly on purpose: this repo is a consumer of its own gate, and these
+# versions decide every tree-sitter hash stored in keystones/. The published
+# extra is a range; a consumer pins its own.
 [dependency-groups]
 dev = [
     "pytest>=8",
