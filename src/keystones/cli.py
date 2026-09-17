@@ -93,7 +93,7 @@ def cmd_fix(args, cfg: Config) -> int:
 
     for item in resolved:
         entry = entries.get(item.marker.id)
-        if entry is None or (args.id and entry.id != args.id):
+        if entry is None or (args.id and entry.id not in args.id):
             continue
         src = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(src, item.target)
@@ -406,7 +406,11 @@ def build_parser() -> argparse.ArgumentParser:
     fix.add_argument(
         "-m", "--message", help="why the code changed; required for semantic drift"
     )
-    fix.add_argument("--id", help="only this keystone")
+    fix.add_argument(
+        "--id",
+        action="append",
+        help="only this keystone; repeatable, so one note can cover several",
+    )
     fix.set_defaults(func=cmd_fix)
 
     add = sub.add_parser(

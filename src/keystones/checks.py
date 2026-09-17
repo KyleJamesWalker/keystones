@@ -9,8 +9,6 @@ from keystones.config import Config
 from keystones.discovery import Resolved
 from keystones.models import Entry, Finding, Severity
 
-_FIX_HINT = 'run `keystones fix -m "<why it changed>"`'
-
 
 def c1_orphan_markers(
     resolved: list[Resolved], entries: dict[str, Entry]
@@ -73,8 +71,8 @@ def c3_c4_hashes(
                 Finding(
                     "C3",
                     Severity.WARNING if warn_only else Severity.ERROR,
-                    f"keystone '{entry.id}' changed. Its owner must review this. "
-                    f"{_FIX_HINT}",
+                    f"keystone '{entry.id}' changed. Its owner must review "
+                    f'this. run `keystones fix --id {entry.id} -m "<why it changed>"`',
                     item.marker.path,
                     item.marker.lineno,
                     owner_hint=entry.category,
@@ -85,7 +83,8 @@ def c3_c4_hashes(
                 Finding(
                     "C4",
                     Severity.WARNING if warn_only else Severity.ERROR,
-                    f"comments inside keystone '{entry.id}' changed. {_FIX_HINT}",
+                    f"comments inside keystone '{entry.id}' changed. "
+                    f'run `keystones fix --id {entry.id} -m "<why it changed>"`',
                     item.marker.path,
                     item.marker.lineno,
                 )
