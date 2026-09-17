@@ -8,6 +8,16 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 
+@pytest.fixture(autouse=True)
+def plain_output(monkeypatch):
+    """Findings switch to GitHub annotations when GITHUB_ACTIONS is set.
+
+    Tests assert on the plain form, so they must not change shape by virtue of
+    running on a runner.
+    """
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A git repo configured for keystones, with one keystone-worthy function."""
