@@ -7,6 +7,7 @@ fleet on the same morning.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from functools import cache
 
@@ -125,7 +126,14 @@ def _pack_version() -> str:
 @cache
 def _parser(language: str):
     try:
-        from tree_sitter_language_pack import get_parser
+        with warnings.catch_warnings():
+            # tree_sitter._binding has not declared Py_MOD_GIL_NOT_USED, so a
+            # free-threaded build re-enables the GIL and warns on every run.
+            # Not actionable here, and not the user's problem.
+            warnings.filterwarnings(
+                "ignore", message=".*interpreter lock.*", category=RuntimeWarning
+            )
+            from tree_sitter_language_pack import get_parser
     except ImportError as exc:
         raise Unavailable(
             "tree-sitter support needs the extra: pip install 'keystones[all]'"
