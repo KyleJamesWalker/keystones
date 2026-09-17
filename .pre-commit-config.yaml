@@ -1,0 +1,56 @@
+---
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-toml
+      - id: check-yaml
+
+  # keystones gates its own hasher. See keystones/hasher/.
+  #
+  # A consuming repo pins its grammar pack in its own config, which is what
+  # makes its hashes deterministic:
+  #
+  #   - repo: https://github.com/KyleJamesWalker/keystones
+  #     rev: v0.1.0
+  #     hooks:
+  #       - id: keystones-all
+  #         additional_dependencies: ["tree-sitter-language-pack==1.20.0"]
+  #
+  # This repo cannot do that: additional_dependencies installs a non-editable
+  # snapshot, so the hook would check a stale copy of the code it is meant to
+  # be testing. `uv run` uses the working tree, and the exact pin in the dev
+  # group serves the same purpose here.
+  - repo: local
+    hooks:
+      - id: keystones
+        name: keystones (staged)
+        entry: uv run keystones check --warn-only
+        language: system
+        types: [python]
+        # Local feedback only. CI runs the whole-repo hook below instead.
+        stages: [pre-commit]
+        verbose: true
+      - id: keystones-all
+        name: keystones
+        entry: uv run keystones check --all
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+      - id: keystones-doctor
+        name: keystones doctor
+        entry: uv run keystones doctor
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]

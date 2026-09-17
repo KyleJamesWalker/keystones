@@ -1,0 +1,76 @@
+---
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # The pinned-hash canary in tests/test_hashing.py is the point of this
+    # matrix: it fails if the hash basis moves between interpreters.
+    name: test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --group dev --python ${{ matrix.python }}
+      - run: uv run --python ${{ matrix.python }} pytest -q
+
+  # The tool must stay usable with no parser dependency at all, so this runs
+  # the suite without the extra. The tree-sitter tests skip themselves.
+  test-no-extra:
+    name: test (no extra)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      # An explicitly isolated venv: `uv run --with .` still resolves the
+      # project's dev group, so it does not actually test the no-extra path.
+      - run: uv venv /tmp/noextra
+      - run: uv pip install --python /tmp/noextra/bin/python pytest .
+      - run: /tmp/noextra/bin/python -m pytest -q
+
+  # The matrix above installs the pinned grammar pack, so on its own it would
+  # never notice an upstream grammar change until a consumer did. This runs the
+  # same suite against the newest pack; the pinned-hash canaries in
+  # tests/test_treesitter.py are what turn a moved grammar into a failure here.
+  test-latest-grammars:
+    name: test (latest grammars)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv venv /tmp/latest
+      - run: >
+          uv pip install --python /tmp/latest/bin/python --upgrade
+          pytest tree-sitter tree-sitter-language-pack .
+      - run: /tmp/latest/bin/python -m pip list 2>/dev/null | grep tree-sitter || true
+      - run: /tmp/latest/bin/python -m pytest -q
+
+  # Every lint and gate runs through pre-commit, so CI and a developer's machine
+  # execute the same hooks from the same config. A job that re-implemented ruff
+  # here could drift from .pre-commit-config.yaml without anything failing.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # C9 compares against the merge base, which needs real history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --group dev
+      - run: uv run pre-commit run --all-files --hook-stage manual --show-diff-on-failure
+        env:
+          # doctor skips with a notice unless this can read branch protection,
+          # which the default token cannot.
+          GH_TOKEN: ${{ secrets.KEYSTONES_ADMIN_TOKEN || github.token }}

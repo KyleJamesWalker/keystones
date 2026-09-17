@@ -1,0 +1,8 @@
+# The gate's own trust boundary. Changing any of these changes what the gate
+# can enforce, so they are reviewed like the sidecars themselves.
+/keystones/               @KyleJamesWalker
+/.github/CODEOWNERS       @KyleJamesWalker
+/.github/workflows/       @KyleJamesWalker
+/.pre-commit-config.yaml  @KyleJamesWalker
+/.pre-commit-hooks.yaml   @KyleJamesWalker
+/pyproject.toml           @KyleJamesWalker

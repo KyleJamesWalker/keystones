@@ -1,0 +1,116 @@
+"""Walk the repo and resolve every marker to a target."""
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from keystones import adapters
+from keystones import markers as marker_grammar
+from keystones.adapters.base import ResolutionError
+from keystones.config import Config
+from keystones.markers import RegionError
+from keystones.models import Finding, Marker, Severity, Target
+
+
+@dataclass(frozen=True)
+class Resolved:
+    marker: Marker
+    target: Target
+    adapter: object
+
+
+def _tracked_files(repo_root: Path) -> list[str]:
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-co", "--exclude-standard"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        return [line for line in out.splitlines() if line]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return [
+            str(p.relative_to(repo_root)) for p in repo_root.rglob("*") if p.is_file()
+        ]
+
+
+MAX_SCAN_BYTES = 2_000_000
+
+
+def _readable(path: Path) -> str | None:
+    """Skip binaries and anything too large to be hand-annotated."""
+    try:
+        if path.stat().st_size > MAX_SCAN_BYTES:
+            return None
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
+    """Every file type is in scope now that a fallback adapter exists.
+
+    Parsed extensions are always considered. Everything else is included only
+    when the word appears in it, which keeps a whole-repo scan cheap.
+    """
+    candidates = paths if paths is not None else _tracked_files(cfg.repo_root)
+    parsed = adapters.parsed_extensions()
+    out = []
+    for rel in candidates:
+        if cfg.is_excluded(rel):
+            continue
+        full = cfg.repo_root / rel
+        if not full.is_file():
+            continue
+        if rel.endswith(parsed):
+            out.append(rel)
+            continue
+        text = _readable(full)
+        if text is not None and marker_grammar.looks_like_a_marker(text):
+            out.append(rel)
+    return sorted(out)
+
+
+def collect(
+    cfg: Config, paths: list[str] | None = None
+) -> tuple[list[Resolved], list[Finding], set[str]]:
+    resolved: list[Resolved] = []
+    findings: list[Finding] = []
+    skipped: set[str] = set()
+    for rel in source_files(cfg, paths):
+        if adapters.needs_extra(rel):
+            skipped.add(rel)
+            findings.append(
+                Finding(
+                    "extra",
+                    Severity.ERROR,
+                    f"{rel} needs a parser that is not installed. "
+                    "Run: pip install 'keystones[all]'",
+                    rel,
+                )
+            )
+            continue
+        adapter = adapters.for_path(rel)
+        if adapter is None:
+            continue
+        src = _readable(cfg.repo_root / rel)
+        if src is None:
+            continue
+        try:
+            found = adapter.markers(rel, src)
+        except RegionError as exc:
+            findings.append(Finding("region", Severity.ERROR, str(exc), rel))
+            continue
+        for marker in found:
+            try:
+                target = adapter.resolve(src, marker)
+            except (ResolutionError, SyntaxError, RegionError) as exc:
+                findings.append(
+                    Finding("resolve", Severity.ERROR, str(exc), rel, marker.lineno)
+                )
+                continue
+            resolved.append(Resolved(marker, target, adapter))
+    return resolved, findings, skipped

@@ -1,0 +1,23 @@
+---
+name: release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Trusted Publishing. No API token in repository secrets.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # hatch-vcs reads the version from the tag, so the tag must be here.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build
+      - run: ls -l dist/
+      - run: uv publish --trusted-publishing always
