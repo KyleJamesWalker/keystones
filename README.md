@@ -190,6 +190,31 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | Terraform, HCL | block, region, file | yes, tree-sitter |
 | everything else | region, file | no, normalised text |
 
+### Adding a language
+
+Any grammar `tree-sitter-language-pack` carries can be wired up from your own
+pyproject.toml, without waiting for a release here:
+
+```toml
+[[tool.keystones.language]]
+grammar = "sql"          # the pack's name for the grammar
+extensions = [".sql"]
+definitions = ["create_view", "create_table", "cte"]
+name_fields = []         # SQL names are not in a `name` field
+label_children = ["identifier", "object_reference"]
+line_comment = "--"
+```
+
+`grammar`, `extensions` and `definitions` are required; everything else falls
+back to the defaults the builtin specs use. An unknown key is an error rather
+than a no-op, because a typo would otherwise build a spec that silently matches
+nothing. One extension has one parser, so a table cannot take `.ts` from the
+builtins or an extension another table already claimed.
+
+The table decides the hash basis, so put pyproject.toml in CODEOWNERS alongside
+the sidecars. Editing it reads as a hasher change, not as drift: `migrate`
+proves the entries across whatever the edit did not actually move.
+
 tree-sitter languages need the `all` extra, which declares a range rather than
 a pin. Each entry's hasher id records the grammar version and a digest of the
 language spec that produced the hash:

@@ -321,9 +321,18 @@ def test_the_spec_digest_is_stable_across_processes():
 
 
 def _respec(monkeypatch, **overrides) -> None:
-    """Stand in for a language spec defined outside this file."""
+    """Stand in for a language spec defined outside this file.
+
+    Patches SPECS rather than the routing map, because every CLI call rebuilds
+    the map from SPECS and would otherwise drop the edit.
+    """
     edited = dataclasses.replace(ts.spec_for("app.ts"), **overrides)
-    monkeypatch.setitem(ts._BY_EXTENSION, ".ts", edited)
+    monkeypatch.setattr(
+        ts,
+        "SPECS",
+        tuple(edited if s.language == "typescript" else s for s in ts.SPECS),
+    )
+    ts.install_user_specs(())
 
 
 def test_a_spec_edit_with_identical_output_is_silent(repo, run_cli, monkeypatch):

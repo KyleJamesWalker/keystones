@@ -18,6 +18,17 @@ def plain_output(monkeypatch):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def builtin_languages_only():
+    """Configured languages install into module globals; unpick them after."""
+    from keystones.adapters import treesitter
+
+    original = treesitter.SPECS
+    yield
+    treesitter.SPECS = original
+    treesitter.install_user_specs(())
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A git repo configured for keystones, with one keystone-worthy function."""

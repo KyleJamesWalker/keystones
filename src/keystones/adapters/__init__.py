@@ -27,6 +27,17 @@ def parsers() -> tuple:
     return _CACHE
 
 
+def configure(cfg) -> None:
+    """Install this repo's configured languages. Call once, after loading config."""
+    global _CACHE
+    from keystones.adapters import treesitter
+
+    treesitter.install_user_specs(
+        tuple(treesitter.spec_from_config(lang) for lang in cfg.languages)
+    )
+    _CACHE = None
+
+
 def for_path(path: str, allow_fallback: bool = True):
     suffix = Path(path).suffix
     for adapter in parsers():

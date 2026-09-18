@@ -9,6 +9,7 @@ from pathlib import Path
 from keystones import adapters
 from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
+from keystones.adapters.treesitter import Unavailable
 from keystones.config import Config
 from keystones.markers import RegionError
 from keystones.models import Finding, Marker, Severity, Target
@@ -103,6 +104,10 @@ def collect(
             found = adapter.markers(rel, src)
         except RegionError as exc:
             findings.append(Finding("region", Severity.ERROR, str(exc), rel))
+            continue
+        except Unavailable as exc:
+            skipped.add(rel)
+            findings.append(Finding("grammar", Severity.ERROR, str(exc), rel))
             continue
         for marker in found:
             try:

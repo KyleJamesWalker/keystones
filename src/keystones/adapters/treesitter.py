@@ -110,6 +110,34 @@ SPECS: tuple[LanguageSpec, ...] = (
 _BY_EXTENSION = {ext: spec for spec in SPECS for ext in spec.extensions}
 
 
+def spec_from_config(language) -> LanguageSpec:
+    """Build a spec from one validated `[[tool.keystones.language]]` table."""
+    optional = {
+        field: getattr(language, field)
+        for field in ("comments", "name_fields", "wrappers", "label_children")
+        if getattr(language, field) is not None
+    }
+    if language.line_comment is not None:
+        optional["line_comment"] = language.line_comment
+    return LanguageSpec(
+        language=language.grammar,
+        extensions=language.extensions,
+        definitions=language.definitions,
+        **optional,
+    )
+
+
+def install_user_specs(specs: tuple[LanguageSpec, ...]) -> None:
+    """Rebuild extension routing from the builtins plus this repo's tables.
+
+    Always rebuilds from SPECS, never from the current map, so loading a second
+    repo drops the first one's languages instead of inheriting them.
+    """
+    global _BY_EXTENSION, extensions
+    _BY_EXTENSION = {ext: spec for spec in (*SPECS, *specs) for ext in spec.extensions}
+    extensions = tuple(_BY_EXTENSION)
+
+
 def spec_for(path: str) -> LanguageSpec | None:
     for ext, spec in _BY_EXTENSION.items():
         if path.endswith(ext):
@@ -142,7 +170,16 @@ def _parser(language: str):
         raise Unavailable(
             "tree-sitter support needs the extra: pip install 'keystones[all]'"
         ) from exc
-    return get_parser(language)
+    try:
+        return get_parser(language)
+    except Exception as exc:
+        # A configured grammar the pack does not carry. Left to escape, this
+        # surfaces as a traceback naming neither the grammar nor the table.
+        raise Unavailable(
+            f"no grammar '{language}' in tree-sitter-language-pack "
+            f"{_pack_version()}. Check the name against the pack's language "
+            "list, or drop the [[tool.keystones.language]] table for it."
+        ) from exc
 
 
 def _spec_digest(spec: LanguageSpec) -> str:

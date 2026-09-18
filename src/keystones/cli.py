@@ -532,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 2
+    adapters.configure(cfg)
     return args.func(args, cfg)
 
 
