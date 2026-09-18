@@ -1,6 +1,9 @@
 """The tree-sitter driver, across TypeScript, Go and HCL."""
 
+import dataclasses
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -137,8 +140,8 @@ def test_marker_attached_to_nothing_is_an_error():
 
 
 def test_hasher_id_carries_language_and_grammar_version():
-    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/2+typescript@")
-    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/2+hcl@")
+    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/3+typescript@")
+    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/3+hcl@")
     assert ts.hasher_id_for_path("app.ts") != ts.hasher_id_for_path("ledger.go")
 
 
@@ -261,6 +264,101 @@ def test_the_pinned_pack_is_the_one_under_test():
     """A canary is only evidence if you know which grammar produced it."""
     from importlib.metadata import version
 
-    assert ts.hasher_id_for_path("app.ts").endswith(
-        f"@{version('tree-sitter-language-pack')}"
+    assert f"@{version('tree-sitter-language-pack')}/" in ts.hasher_id_for_path(
+        "app.ts"
     )
+
+
+def _spec(**overrides) -> ts.LanguageSpec:
+    base = {
+        "language": "typescript",
+        "extensions": (".ts",),
+        "definitions": frozenset({"function_declaration"}),
+    }
+    return ts.LanguageSpec(**{**base, **overrides})
+
+
+def test_hasher_id_carries_a_digest_of_the_spec():
+    """The id must identify the spec, not just the grammar that fed it.
+
+    A configurable spec means two installs can share a language and a pack
+    version and still serialise differently. Without this the disagreement
+    reads as C3 drifted code, which is a lie about the source.
+    """
+    widened = _spec(
+        definitions=frozenset({"function_declaration", "class_declaration"})
+    )
+    assert ts.hasher_id_for(_spec()) != ts.hasher_id_for(widened)
+
+
+def test_hasher_id_ignores_fields_that_cannot_move_a_hash():
+    """Otherwise a comment-leader edit bills every consumer a migration."""
+    cosmetic = _spec(extensions=(".ts", ".mts"), line_comment="#")
+    assert ts.hasher_id_for(_spec()) == ts.hasher_id_for(cosmetic)
+
+
+def test_the_spec_digest_is_stable_across_processes():
+    """frozenset iteration order follows PYTHONHASHSEED; the digest must not.
+
+    An unsorted digest would hand every consumer a different id per run, and
+    `fix` would refuse to write in the environment that just computed it.
+    """
+    script = (
+        "from keystones.adapters import treesitter as ts;"
+        "print(ts.hasher_id_for_path('app.ts'))"
+    )
+    ids = {
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        ).stdout.strip()
+        for seed in ("0", "1", "12345")
+    }
+    assert len(ids) == 1
+
+
+def _respec(monkeypatch, **overrides) -> None:
+    """Stand in for a language spec defined outside this file."""
+    edited = dataclasses.replace(ts.spec_for("app.ts"), **overrides)
+    monkeypatch.setitem(ts._BY_EXTENSION, ".ts", edited)
+
+
+def test_a_spec_edit_with_identical_output_is_silent(repo, run_cli, monkeypatch):
+    """Widening a spec past what this file uses must not churn every consumer."""
+    (repo / "app.ts").write_text(TS_SRC)
+    run_cli("add", "--id", "payout-rounding", "-m", "Rounding contract.")
+    _respec(
+        monkeypatch,
+        definitions=ts.spec_for("app.ts").definitions | {"enum_declaration"},
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_spec_edit_that_disagrees_is_c13_not_drift(
+    repo, run_cli, monkeypatch, capsys
+):
+    """The failure this PR exists to prevent.
+
+    Dropping `export_statement` from wrappers takes `export` out of the hash.
+    Nobody touched app.ts, so reporting C3 would send its owner to review a
+    change that never happened.
+    """
+    (repo / "app.ts").write_text(TS_SRC)
+    run_cli("add", "--id", "payout-rounding", "-m", "Rounding contract.")
+    _respec(monkeypatch, wrappers=frozenset())
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C13]" in err and "[C3]" not in err
+
+
+def test_a_spec_edit_migrates_across_when_the_code_is_unchanged(
+    repo, run_cli, monkeypatch
+):
+    (repo / "app.ts").write_text(TS_SRC)
+    run_cli("add", "--id", "payout-rounding", "-m", "Rounding contract.")
+    _respec(monkeypatch, wrappers=frozenset())
+    assert run_cli("migrate") == 0
+    assert run_cli("check", "--all", "--no-base") == 0

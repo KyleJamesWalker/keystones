@@ -191,8 +191,16 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | everything else | region, file | no, normalised text |
 
 tree-sitter languages need the `all` extra, which declares a range rather than
-a pin. The grammar version is recorded in each entry's hasher id, and that, not
-the install requirement, is what makes hashes deterministic.
+a pin. Each entry's hasher id records the grammar version and a digest of the
+language spec that produced the hash:
+
+```
+keystones-ts/3+typescript@1.20.0/4957071ba1a6
+```
+
+That, not the install requirement, is what makes hashes deterministic. The spec
+digest covers only the fields the serialiser reads, so editing a comment leader
+or adding a file extension costs nobody a migration.
 
 A version difference is only reported when it actually matters. On a mismatch
 the hash is recomputed first: if it still reproduces, the grammar emits the same

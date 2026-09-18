@@ -7,6 +7,7 @@ fleet on the same morning.
 
 from __future__ import annotations
 
+import hashlib
 import textwrap
 import warnings
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from keystones.adapters.base import ResolutionError
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
-SERIALIZER_VERSION = 2
+SERIALIZER_VERSION = 3
 
 
 class Unavailable(Exception):
@@ -144,9 +145,36 @@ def _parser(language: str):
     return get_parser(language)
 
 
+def _spec_digest(spec: LanguageSpec) -> str:
+    """Only the fields the serialiser reads, sorted: set order follows PYTHONHASHSEED.
+
+    Extensions and the comment leader are excluded on purpose. Neither can move
+    a hash, and billing every consumer a migration for a cosmetic edit is how a
+    gate gets uninstalled.
+    """
+    payload = "|".join(
+        (
+            ",".join(sorted(spec.definitions)),
+            ",".join(sorted(spec.comments)),
+            ",".join(spec.name_fields),
+            ",".join(sorted(spec.wrappers)),
+            ",".join(spec.label_children),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def hasher_id_for(spec: LanguageSpec) -> str:
-    """Grammar version is part of the identity, so a bump is visible as one."""
-    return f"keystones-ts/{SERIALIZER_VERSION}+{spec.language}@{_pack_version()}"
+    """Grammar version and spec are both part of the identity.
+
+    The spec digest is what lets a language be defined outside this file: an
+    edit to it surfaces as a hasher mismatch that `migrate` can prove across,
+    rather than as drift in code nobody touched.
+    """
+    return (
+        f"keystones-ts/{SERIALIZER_VERSION}+{spec.language}"
+        f"@{_pack_version()}/{_spec_digest(spec)}"
+    )
 
 
 def _parse(spec: LanguageSpec, src: str):
