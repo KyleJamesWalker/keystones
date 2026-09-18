@@ -19,7 +19,7 @@ from keystones.adapters.base import ResolutionError
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
-SERIALIZER_VERSION = 3
+SERIALIZER_VERSION = 2
 
 
 class Unavailable(Exception):

@@ -140,8 +140,8 @@ def test_marker_attached_to_nothing_is_an_error():
 
 
 def test_hasher_id_carries_language_and_grammar_version():
-    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/3+typescript@")
-    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/3+hcl@")
+    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/2+typescript@")
+    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/2+hcl@")
     assert ts.hasher_id_for_path("app.ts") != ts.hasher_id_for_path("ledger.go")
 
 

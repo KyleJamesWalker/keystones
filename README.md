@@ -195,7 +195,7 @@ a pin. Each entry's hasher id records the grammar version and a digest of the
 language spec that produced the hash:
 
 ```
-keystones-ts/3+typescript@1.20.0/4957071ba1a6
+keystones-ts/2+typescript@1.20.0/4957071ba1a6
 ```
 
 That, not the install requirement, is what makes hashes deterministic. The spec
