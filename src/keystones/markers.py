@@ -51,11 +51,22 @@ def is_marker(text: str) -> bool:
     )
 
 
-def _split(qualifiers: str | None) -> tuple[Scope, str]:
+def _split(qualifiers: str | None) -> tuple[Scope, str, str | None]:
+    """Scope, category and hash kind out of `(file, finance, hash=text)`.
+
+    The hash qualifier is keyed so it cannot be confused with a category that
+    happens to be called `text`.
+    """
     parts = [q.strip() for q in (qualifiers or "").split(",") if q.strip()]
-    scope = Scope.FILE if "file" in parts else Scope.NODE
-    category = next((q for q in parts if q != "file"), "default")
-    return scope, category
+    kinds = [q[len("hash=") :].strip() for q in parts if q.startswith("hash=")]
+    if len(kinds) > 1:
+        raise MarkerError(f"more than one hash= qualifier: {', '.join(kinds)}")
+    if kinds and not kinds[0]:
+        raise MarkerError("hash= needs a value, such as hash=text")
+    plain = [q for q in parts if not q.startswith("hash=")]
+    scope = Scope.FILE if "file" in plain else Scope.NODE
+    category = next((q for q in plain if q != "file"), "default")
+    return scope, category, (kinds[0] if kinds else None)
 
 
 def parse_point(text: str, path: str, lineno: int) -> Marker | None:
@@ -65,16 +76,16 @@ def parse_point(text: str, path: str, lineno: int) -> Marker | None:
     match = POINT_RE.search(text)
     if not match:
         return None
-    scope, category = _split(match.group("qualifiers"))
-    return Marker(match.group("id"), category, scope, path, lineno)
+    scope, category, kind = _split(match.group("qualifiers"))
+    return Marker(match.group("id"), category, scope, path, lineno, kind)
 
 
 def parse_region_start(text: str, path: str, lineno: int) -> Marker | None:
     match = START_RE.search(text)
     if not match:
         return None
-    _, category = _split(match.group("qualifiers"))
-    return Marker(match.group("id"), category, Scope.REGION, path, lineno)
+    _, category, kind = _split(match.group("qualifiers"))
+    return Marker(match.group("id"), category, Scope.REGION, path, lineno, kind)
 
 
 def is_region_end(text: str) -> bool:
@@ -135,6 +146,10 @@ def scan_lines(
             "is never closed"
         )
     return markers, regions
+
+
+class MarkerError(Exception):
+    """A marker is written wrongly, as opposed to attached to nothing."""
 
 
 class RegionError(Exception):

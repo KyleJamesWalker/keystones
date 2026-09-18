@@ -11,6 +11,7 @@ from pathlib import Path
 
 from keystones import adapters, dependencies, gitref, sidecar
 from keystones import markers as marker_grammar
+from keystones.adapters.base import ResolutionError
 from keystones.checks import run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect
@@ -148,6 +149,7 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.target = target_str
         entry.semantic = semantic
         entry.text = text
+        entry.hash = item.adapter.kind_for_path(item.marker.path)
         entry.hasher = item.adapter.hasher_id_for_path(item.marker.path)
         entry.source = item.adapter.canonical_source(src, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
@@ -171,6 +173,32 @@ def _lang_for(path: str) -> str:
         ".yml": "yaml",
         ".json": "json",
     }.get(Path(path).suffix, "")
+
+
+def _chosen_basis(rel: str, src: str, preferred, kind: str | None, scope: Scope):
+    """Resolve --hash, or refuse to guess when the preferred basis cannot read.
+
+    Choosing silently here would bake a basis nobody agreed to into the hash,
+    and the marker would not say which one produced it.
+    """
+    if kind:
+        if kind == adapters.TEXT_KIND and scope is Scope.NODE:
+            raise adapters.UnknownKind(
+                f"{rel}: --hash text has no nodes to attach to. Drop the ::name "
+                "for a whole-file keystone, or write a region by hand."
+            )
+        return adapters.for_kind(rel, kind)
+    try:
+        preferred.markers(rel, src)
+    except ResolutionError as exc:
+        failed = preferred.kind_for_path(rel)
+        options = " ".join(
+            f"--hash {k}" for k in adapters.kinds_for(rel, exclude=failed)
+        )
+        raise adapters.UnknownKind(
+            f"{rel} {exc} Say which basis to gate on: {options}"
+        ) from exc
+    return preferred
 
 
 def _adopt(args, cfg: Config) -> int:
@@ -218,6 +246,7 @@ def _adopt(args, cfg: Config) -> int:
         id=args.id,
         category=category,
         target=str(item.target),
+        hash=item.adapter.kind_for_path(item.marker.path),
         hasher=item.adapter.hasher_id_for_path(item.marker.path),
         semantic=semantic,
         text=text_digest,
@@ -289,6 +318,11 @@ def cmd_add(args, cfg: Config) -> int:
         return 1
 
     src = path.read_text()
+    try:
+        adapter = _chosen_basis(rel, src, adapter, args.hash_kind, scope)
+    except adapters.UnknownKind as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
     if scope is Scope.FILE:
         target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
         insert_at, indent = _file_scope_insert_line(src), ""
@@ -311,7 +345,10 @@ def cmd_add(args, cfg: Config) -> int:
         return 1
 
     leader = adapter.comment_prefix(rel)
-    keyword = "keystone" if args.category == "default" else f"keystone({args.category})"
+    quals = [] if args.category == "default" else [args.category]
+    if getattr(args, "hash_kind", None):
+        quals.append(f"hash={args.hash_kind}")
+    keyword = f"keystone({', '.join(quals)})" if quals else "keystone"
     lines = src.splitlines(keepends=True)
     lines.insert(insert_at - 1, f"{indent}{leader} {keyword}: {args.id}\n")
     path.write_text("".join(lines))
@@ -327,6 +364,7 @@ def cmd_add(args, cfg: Config) -> int:
         id=args.id,
         category=args.category,
         target=str(new_target),
+        hash=adapter.kind_for_path(rel),
         hasher=adapter.hasher_id_for_path(rel),
         semantic=semantic,
         text=text,
@@ -492,6 +530,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add.add_argument("--id", required=True)
     add.add_argument("--category", default="default")
+    add.add_argument(
+        "--hash",
+        dest="hash_kind",
+        help="basis to gate on: 'text', or a grammar name. Auto when the file "
+        "has exactly one readable basis.",
+    )
     add.add_argument("-m", "--message", required=True, help="why this is load-bearing")
     add.add_argument("--review-every", help="staleness budget, e.g. 180d")
     add.add_argument(

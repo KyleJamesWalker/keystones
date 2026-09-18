@@ -8,11 +8,12 @@ from pathlib import Path
 
 from keystones import adapters
 from keystones import markers as marker_grammar
+from keystones.adapters import fallback
 from keystones.adapters.base import ResolutionError
 from keystones.adapters.treesitter import Unavailable
 from keystones.config import Config
-from keystones.markers import RegionError
-from keystones.models import Finding, Marker, Severity, Target
+from keystones.markers import MarkerError, RegionError
+from keystones.models import Finding, Marker, Scope, Severity, Target
 
 
 @dataclass(frozen=True)
@@ -94,14 +95,15 @@ def collect(
                 )
             )
             continue
-        adapter = adapters.for_path(rel)
-        if adapter is None:
+        preferred = adapters.for_path(rel)
+        if preferred is None:
             continue
         src = _readable(cfg.repo_root / rel)
         if src is None:
             continue
+        readable = True
         try:
-            found = adapter.markers(rel, src)
+            found = preferred.markers(rel, src)
         except RegionError as exc:
             findings.append(Finding("region", Severity.ERROR, str(exc), rel))
             continue
@@ -109,7 +111,26 @@ def collect(
             skipped.add(rel)
             findings.append(Finding("grammar", Severity.ERROR, str(exc), rel))
             continue
+        except MarkerError as exc:
+            findings.append(Finding("marker", Severity.ERROR, f"{rel}: {exc}", rel))
+            continue
+        except ResolutionError:
+            # The grammar cannot read the file. Markers are comments, so a text
+            # scan still finds them, and one that names a basis is honoured.
+            readable = False
+            try:
+                found = fallback.markers(rel, src)
+            except (RegionError, MarkerError) as exc:
+                findings.append(Finding("marker", Severity.ERROR, f"{rel}: {exc}", rel))
+                continue
         for marker in found:
+            try:
+                adapter = _adapter_for(rel, marker, preferred, readable)
+            except adapters.UnknownKind as exc:
+                findings.append(
+                    Finding("kind", Severity.ERROR, str(exc), rel, marker.lineno)
+                )
+                continue
             try:
                 target = adapter.resolve(src, marker)
             except (ResolutionError, SyntaxError, RegionError) as exc:
@@ -119,3 +140,30 @@ def collect(
                 continue
             resolved.append(Resolved(marker, target, adapter))
     return resolved, findings, skipped
+
+
+def _adapter_for(rel: str, marker: Marker, preferred, readable: bool):
+    """The basis the marker asked for, or the only one available.
+
+    Recorded rather than re-derived, so a grammar that starts reading a file it
+    could not read before does not silently move that file's hash basis.
+    """
+    if marker.hash_kind is not None:
+        if marker.hash_kind == adapters.TEXT_KIND and marker.scope is Scope.NODE:
+            raise adapters.UnknownKind(
+                f"{rel}:{marker.lineno}: '{marker.id}' asks for hash=text, which "
+                "has no nodes to attach to. Use keystone(file, hash=text) or a "
+                "keystone:start / keystone:end region."
+            )
+        return adapters.for_kind(rel, marker.hash_kind)
+    if readable:
+        return preferred
+    raise adapters.UnknownKind(
+        f"{rel}:{marker.lineno}: '{marker.id}' has no basis to be hashed with. "
+        f"{rel} does not parse as {preferred.kind_for_path(rel)}, so say which "
+        "with a hash= qualifier: "
+        + ", ".join(
+            "hash=" + k
+            for k in adapters.kinds_for(rel, exclude=preferred.kind_for_path(rel))
+        )
+    )

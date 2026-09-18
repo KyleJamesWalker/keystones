@@ -19,6 +19,7 @@ LANGUAGE_KEYS = frozenset(
         "wrappers",
         "label_children",
         "line_comment",
+        "fold_case",
     }
 )
 REQUIRED_LANGUAGE_KEYS = ("grammar", "extensions", "definitions")
@@ -41,6 +42,7 @@ class LanguageConfig:
     wrappers: frozenset[str] | None = None
     label_children: tuple[str, ...] | None = None
     line_comment: str | None = None
+    fold_case: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -144,7 +146,7 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
     for key in ("comments", "wrappers"):
         if key in table:
             optional[key] = frozenset(_strs(table, key, where))
-    for key in ("name_fields", "label_children"):
+    for key in ("name_fields", "label_children", "fold_case"):
         if key in table:
             optional[key] = tuple(_strs(table, key, where))
     if "line_comment" in table:

@@ -62,6 +62,23 @@ def c3_c4_hashes(
         entry = entries.get(item.marker.id)
         if entry is None:
             continue
+        # The basis is recorded in two places on purpose, so editing one and
+        # not the other is caught instead of quietly re-gating the keystone.
+        actual_kind = item.adapter.kind_for_path(item.marker.path)
+        if entry.hash and entry.hash != actual_kind:
+            out.append(
+                Finding(
+                    "C14",
+                    severity,
+                    f"keystone '{entry.id}' is recorded as hash={entry.hash} but "
+                    f"its marker gates on hash={actual_kind}. One of the two was "
+                    "edited without the other; make them agree.",
+                    item.marker.path,
+                    item.marker.lineno,
+                    owner_hint=entry.category,
+                )
+            )
+            continue
         expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
         rehashed = entry.hasher and entry.hasher != expected_hasher
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")

@@ -120,10 +120,11 @@ def test_shifting_the_region_down_is_an_auto_fixable_move(infra, run_cli):
 
 
 def test_whole_file_keystone_on_an_unparsed_file(repo, run_cli):
-    (repo / "schema.sql").write_text("-- keystone(file): schema\nSELECT 1;\n")
+    """.ddl has no parser; .sql is a builtin tree-sitter language now."""
+    (repo / "schema.ddl").write_text("-- keystone(file): schema\nSELECT 1;\n")
     assert run_cli("add", "--id", "schema", "-m", "Contract with the warehouse.") == 0
     assert run_cli("check", "--all", "--no-base") == 0
-    (repo / "schema.sql").write_text("-- keystone(file): schema\nSELECT 2;\n")
+    (repo / "schema.ddl").write_text("-- keystone(file): schema\nSELECT 2;\n")
     assert run_cli("check", "--all", "--no-base") == 1
 
 

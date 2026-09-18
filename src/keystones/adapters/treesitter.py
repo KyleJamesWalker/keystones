@@ -26,6 +26,15 @@ class Unavailable(Exception):
     """The `all` extra is not installed."""
 
 
+class ParseError(ResolutionError):
+    """The grammar could not read the file.
+
+    Hashing an error-recovery tree is worse than refusing one. Recovery shape
+    is the least stable part of a grammar's output, so the hash would move on a
+    pack bump with nobody having touched the file.
+    """
+
+
 @dataclass(frozen=True)
 class LanguageSpec:
     language: str
@@ -38,6 +47,9 @@ class LanguageSpec:
     wrappers: frozenset[str] = frozenset()
     label_children: tuple[str, ...] = ()
     line_comment: str = "//"
+    # Node-type prefixes whose text is case-insensitive. SQL keywords are the
+    # case: sqlfluff rewrites `select` to `SELECT` without changing meaning.
+    fold_case: tuple[str, ...] = ()
 
 
 SPECS: tuple[LanguageSpec, ...] = (
@@ -105,6 +117,19 @@ SPECS: tuple[LanguageSpec, ...] = (
         label_children=("identifier", "string_lit"),
         line_comment="#",
     ),
+    LanguageSpec(
+        language="sql",
+        extensions=(".sql",),
+        definitions=frozenset(
+            {"create_view", "create_table", "create_function", "cte"}
+        ),
+        # `marginalia` is this grammar's name for a /* */ block.
+        comments=frozenset({"comment", "marginalia"}),
+        name_fields=(),
+        label_children=("identifier", "object_reference"),
+        line_comment="--",
+        fold_case=("keyword_",),
+    ),
 )
 
 _BY_EXTENSION = {ext: spec for spec in SPECS for ext in spec.extensions}
@@ -114,7 +139,13 @@ def spec_from_config(language) -> LanguageSpec:
     """Build a spec from one validated `[[tool.keystones.language]]` table."""
     optional = {
         field: getattr(language, field)
-        for field in ("comments", "name_fields", "wrappers", "label_children")
+        for field in (
+            "comments",
+            "name_fields",
+            "wrappers",
+            "label_children",
+            "fold_case",
+        )
         if getattr(language, field) is not None
     }
     if language.line_comment is not None:
@@ -196,6 +227,7 @@ def _spec_digest(spec: LanguageSpec) -> str:
             ",".join(spec.name_fields),
             ",".join(sorted(spec.wrappers)),
             ",".join(spec.label_children),
+            ",".join(spec.fold_case),
         )
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
@@ -214,8 +246,14 @@ def hasher_id_for(spec: LanguageSpec) -> str:
     )
 
 
-def _parse(spec: LanguageSpec, src: str):
-    return _parser(spec.language).parse(src.encode("utf-8"))
+def _parse(spec: LanguageSpec, src: str, strict: bool = True):
+    tree = _parser(spec.language).parse(src.encode("utf-8"))
+    if strict and tree.root_node.has_error:
+        raise ParseError(
+            f"does not parse as {spec.language}. A templating layer the grammar "
+            "cannot read (dbt Jinja, ERB) will do this."
+        )
+    return tree
 
 
 # Separators a formatter adds or removes freely. Prettier writes a trailing
@@ -253,6 +291,8 @@ def _unwrap_parameter(node):
 def _normalise_leaf(node, spec: LanguageSpec) -> str | None:
     """Fold away spellings a formatter changes without changing meaning."""
     text = node.text.decode("utf-8", "replace")
+    if spec.fold_case and node.type.startswith(spec.fold_case):
+        return f"{node.type}:{text.lower()!r}"
     if spec.language in _JS_LIKE and node.type == "number":
         try:
             value = float(text.replace("_", ""))
@@ -497,7 +537,7 @@ def hash_stored_source(source: str, target: str) -> str:
     path = target.split("::")[0]
     spec = spec_for(path)
     if "::" not in target:
-        root = _parse(spec, source).root_node
+        root = _parse(spec, source, strict=False).root_node
         return digest(_render(root, spec.comments, spec) or "")
 
     # The stored slice is the node's own text, so a method arrives indented
@@ -505,7 +545,7 @@ def hash_stored_source(source: str, target: str) -> str:
     # any depth rather than matching the qualname, which has no context here.
     fragment = textwrap.dedent(source)
 
-    root = _parse(spec, fragment).root_node
+    root = _parse(spec, fragment, strict=False).root_node
     for _name, node in _definitions(root, spec):
         # Must render from the same node `hashes` does: the outermost wrapper.
         return digest(_render(_outermost(node, spec), spec.comments, spec) or "")
@@ -515,7 +555,7 @@ def hash_stored_source(source: str, target: str) -> str:
         # needs a class shell; the shell itself is a definition, hence the
         # prefix filter.
         shell = "__keystones__"
-        root = _parse(spec, f"class {shell} {{\n{fragment}\n}}").root_node
+        root = _parse(spec, f"class {shell} {{\n{fragment}\n}}", strict=False).root_node
         for name, node in _definitions(root, spec):
             if name.startswith(f"{shell}."):
                 return digest(_render(node, spec.comments, spec) or "")
@@ -553,6 +593,10 @@ def available() -> bool:
 
 def hasher_id_for_path(path: str) -> str:
     return hasher_id_for(spec_for(path))
+
+
+def kind_for_path(path: str) -> str:
+    return spec_for(path).language
 
 
 def duplicate_qualnames(path: str, src: str) -> set[str]:

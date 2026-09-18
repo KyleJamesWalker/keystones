@@ -188,7 +188,49 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | TypeScript, TSX, JavaScript | function, method, class, interface, type alias, region, file | yes, tree-sitter |
 | Go | func, method, type, const, region, file | yes, tree-sitter |
 | Terraform, HCL | block, region, file | yes, tree-sitter |
+| SQL | view, table, function, CTE, region, file | yes, tree-sitter |
 | everything else | region, file | no, normalised text |
+
+### Choosing what a keystone is hashed on
+
+Most files have one answer and you never think about it: Python gets its AST,
+`.yaml` gets normalised text. A file the parser cannot read is the exception,
+and templated SQL is the common case:
+
+```sql
+{{ config(materialized='incremental') }}
+select
+    order_id,
+-- keystone:start(finance, hash=text): revenue-recognition
+    amount * 0.97 as net_revenue
+-- keystone:end
+from {{ ref('orders') }}
+```
+
+`keystones add` refuses to pick for you when the preferred parser fails:
+
+```
+models/revenue.sql:4: error: [kind] 'revenue-recognition' has no basis to be
+hashed with. models/revenue.sql does not parse as sql, so say which with a
+hash= qualifier: hash=text
+```
+
+The choice lands in the marker and in the sidecar, and `check` reads it rather
+than re-deriving it from the file extension. That matters: without it, a
+grammar bump that starts reading a file it could not read before would silently
+move that file's hash basis and report drift on code nobody touched.
+
+```toml
+target = "models/revenue.sql#L5-L5"
+hash   = "text"
+hasher = "keystones-text/1"
+```
+
+`hash` is the choice a person made and does not move. `hasher` is the exact
+basis, including grammar and spec versions, and is what `migrate` reconciles.
+The two must agree with the marker; editing one without the other is [C14].
+
+`hash=text` has no AST, so it only goes with `keystone(file, ...)` or a region.
 
 ### Adding a language
 

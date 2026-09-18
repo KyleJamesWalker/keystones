@@ -244,6 +244,16 @@ PINNED_BY_LANGUAGE = {
         "}\n",
         "sha256:5521957ec081e77753bd920b7949006e9488c559d9ebcabbf99b9f24edc206a2",
     ),
+    "sql": (
+        "m.sql",
+        "-- keystone: k\n"
+        "create or replace view net_revenue as\n"
+        "with adjusted as (\n"
+        "    select order_id, amount * 0.97 as net from orders\n"
+        ")\n"
+        "select * from adjusted;\n",
+        "sha256:fd40cd3b5e774226783a8f4791bcc1766aeb527d8e8b7425ca339522518df829",
+    ),
 }
 
 

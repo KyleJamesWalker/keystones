@@ -2,7 +2,7 @@
 
 Any file can carry a file-scope or region keystone with no parser at all. The
 canonical form is normalised text, which means a reformat of a whole-file
-keystone does trip it. Region markers exist so YAML, Terraform and SQL get
+keystone does trip it. Region markers exist so YAML and the rest get
 granularity instead of collapsing to the file.
 """
 
@@ -111,3 +111,7 @@ def duplicate_qualnames(path: str, src: str) -> set[str]:
 
 def comment_prefix(path: str) -> str:
     return "#"
+
+
+def kind_for_path(path: str) -> str:
+    return "text"

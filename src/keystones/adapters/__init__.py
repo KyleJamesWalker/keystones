@@ -38,6 +38,34 @@ def configure(cfg) -> None:
     _CACHE = None
 
 
+class UnknownKind(Exception):
+    """A marker asked for a basis this file cannot be hashed with."""
+
+
+TEXT_KIND = "text"
+
+
+def kinds_for(path: str, exclude: str | None = None) -> tuple[str, ...]:
+    """Every basis this file could be hashed with, best first.
+
+    Text is always available; it is what a file with no parser already gets.
+    """
+    parsed = for_path(path, allow_fallback=False)
+    kinds = (TEXT_KIND,) if parsed is None else (parsed.kind_for_path(path), TEXT_KIND)
+    return tuple(k for k in kinds if k != exclude)
+
+
+def for_kind(path: str, kind: str):
+    if kind == TEXT_KIND:
+        return fallback
+    parsed = for_path(path, allow_fallback=False)
+    if parsed is not None and parsed.kind_for_path(path) == kind:
+        return parsed
+    raise UnknownKind(
+        f"{path}: no '{kind}' basis here. Available: {', '.join(kinds_for(path))}"
+    )
+
+
 def for_path(path: str, allow_fallback: bool = True):
     suffix = Path(path).suffix
     for adapter in parsers():
