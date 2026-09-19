@@ -20,9 +20,10 @@ LANGUAGE_KEYS = frozenset(
         "label_children",
         "line_comment",
         "fold_case",
+        "builtin",
+        "hash",
     }
 )
-REQUIRED_LANGUAGE_KEYS = ("grammar", "extensions", "definitions")
 
 
 @dataclass(frozen=True)
@@ -34,9 +35,13 @@ class LanguageConfig:
     grammar pack at all.
     """
 
-    grammar: str
+    grammar: str | None
     extensions: tuple[str, ...]
-    definitions: frozenset[str]
+    definitions: frozenset[str] | None = None
+    # Names a spec this package ships, instead of declaring one here.
+    builtin: str | None = None
+    # The basis markers in these files get when they do not name one.
+    hash: str | None = None
     comments: frozenset[str] | None = None
     name_fields: tuple[str, ...] | None = None
     wrappers: frozenset[str] | None = None
@@ -84,16 +89,15 @@ class ConfigError(Exception):
     pass
 
 
-def _builtin_extensions() -> dict[str, str]:
-    """Extension -> the builtin that owns it, for collision reporting."""
-    from keystones.adapters import python as python_adapter
-    from keystones.adapters import treesitter
+def _unoverridable() -> frozenset[str]:
+    """Extensions a table cannot take, because taking them would do nothing.
 
-    owners = {ext: "python" for ext in python_adapter.extensions}
-    for spec in treesitter.SPECS:
-        for ext in spec.extensions:
-            owners[ext] = spec.language
-    return owners
+    Python is not a tree-sitter spec, and adapter lookup reaches it first, so a
+    table claiming .py would install a spec that never gets used.
+    """
+    from keystones.adapters import python as python_adapter
+
+    return frozenset(python_adapter.extensions)
 
 
 def _strs(table: dict, key: str, where: str) -> list[str]:
@@ -101,6 +105,12 @@ def _strs(table: dict, key: str, where: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ConfigError(f"{where}: {key} must be a list of strings")
     return value
+
+
+def _builtin_specs() -> dict[str, object]:
+    from keystones.adapters import treesitter
+
+    return {spec.language: spec for spec in treesitter.SPECS}
 
 
 def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfig:
@@ -111,14 +121,36 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
             f"{where}: unknown key(s) {', '.join(unknown)}. "
             f"Valid keys: {', '.join(sorted(LANGUAGE_KEYS))}"
         )
-    missing = [key for key in REQUIRED_LANGUAGE_KEYS if key not in table]
-    if missing:
-        raise ConfigError(f"{where}: missing required key(s) {', '.join(missing)}")
+    if "extensions" not in table:
+        raise ConfigError(f"{where}: missing required key extensions")
+    if "grammar" in table and "builtin" in table:
+        raise ConfigError(
+            f"{where}: grammar and builtin are alternatives. Use builtin to take "
+            "a spec this package ships, grammar to declare one here."
+        )
 
-    grammar = table["grammar"]
-    if not isinstance(grammar, str) or not grammar:
+    builtin = table.get("builtin")
+    if builtin is not None:
+        shipped = _builtin_specs()
+        if builtin not in shipped:
+            raise ConfigError(
+                f"{where}: no builtin spec '{builtin}'. "
+                f"Available: {', '.join(sorted(shipped))}"
+            )
+        if "definitions" in table:
+            raise ConfigError(
+                f"{where}: builtin '{builtin}' brings its own definitions"
+            )
+
+    grammar = table.get("grammar")
+    if grammar is not None and (not isinstance(grammar, str) or not grammar):
         raise ConfigError(f"{where}: grammar must be a non-empty string")
-    where = f"{where} (grammar '{grammar}')"
+    if grammar is not None and "definitions" not in table:
+        raise ConfigError(f"{where}: missing required key definitions")
+    named = grammar or builtin
+    where = (
+        f"{where} ({'grammar' if grammar else 'builtin'} '{named}')" if named else where
+    )
 
     extensions = _strs(table, "extensions", where)
     if not extensions:
@@ -126,21 +158,40 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
     for ext in extensions:
         if not ext.startswith("."):
             raise ConfigError(f"{where}: extension '{ext}' must start with a dot")
-        # Silently rebinding an extension would change the hash of every file
-        # with it, which is indistinguishable from the code having changed.
+        # Taking an extension from a builtin is fine: a table in a reviewed
+        # pyproject is the opposite of the silent rebinding this guards
+        # against. Two tables fighting over one extension is still a mistake.
         if ext in claimed:
             raise ConfigError(
-                f"{where}: extension '{ext}' is already handled by "
-                f"'{claimed[ext]}'. One extension, one parser."
+                f"{where}: extension '{ext}' is already claimed by "
+                f"'{claimed[ext]}'. One extension, one table."
             )
-        claimed[ext] = grammar
+        if ext in _unoverridable():
+            raise ConfigError(
+                f"{where}: '{ext}' is handled by the Python adapter and cannot "
+                "be reassigned."
+            )
+        claimed[ext] = named or "text"
 
-    definitions = _strs(table, "definitions", where)
-    if not definitions:
-        raise ConfigError(
-            f"{where}: definitions must not be empty; without node types there "
-            "is nothing to attach a keystone to"
-        )
+    definitions = None
+    if grammar is not None:
+        definitions = _strs(table, "definitions", where)
+        if not definitions:
+            raise ConfigError(
+                f"{where}: definitions must not be empty; without node types "
+                "there is nothing to attach a keystone to"
+            )
+
+    default_hash = table.get("hash")
+    if default_hash is not None:
+        if not isinstance(default_hash, str):
+            raise ConfigError(f"{where}: hash must be a string")
+        available = {"text"} | ({named} if named else set())
+        if default_hash not in available:
+            raise ConfigError(
+                f"{where}: hash '{default_hash}' is not a basis this table "
+                f"offers. Available: {', '.join(sorted(available))}"
+            )
 
     optional: dict[str, object] = {}
     for key in ("comments", "wrappers"):
@@ -157,7 +208,9 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
     return LanguageConfig(
         grammar=grammar,
         extensions=tuple(extensions),
-        definitions=frozenset(definitions),
+        definitions=frozenset(definitions) if definitions else None,
+        builtin=builtin,
+        hash=default_hash,
         **optional,
     )
 
@@ -166,7 +219,7 @@ def _languages(data: dict) -> tuple[LanguageConfig, ...]:
     tables = data.get("language", [])
     if not isinstance(tables, list):
         raise ConfigError("tool.keystones.language must be an array of tables")
-    claimed = _builtin_extensions()
+    claimed: dict[str, str] = {}
     return tuple(_language(t, i, claimed) for i, t in enumerate(tables))
 
 

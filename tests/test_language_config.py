@@ -118,9 +118,16 @@ def test_an_unknown_key_is_refused(repo):
         load(repo)
 
 
-def test_an_extension_owned_by_a_builtin_is_refused(repo):
+def test_an_extension_owned_by_a_builtin_may_be_taken(repo):
+    """A table in a reviewed pyproject is not the silent rebinding we refuse."""
     configure(repo, SQL_TABLE.replace('[".bqsql"]', '[".ts"]'))
-    with pytest.raises(ConfigError, match=r"\.ts"):
+    assert load(repo).languages[0].extensions == (".ts",)
+
+
+def test_the_python_adapters_extensions_cannot_be_taken(repo):
+    """Lookup reaches the Python adapter first, so the table would do nothing."""
+    configure(repo, SQL_TABLE.replace('[".bqsql"]', '[".py"]'))
+    with pytest.raises(ConfigError, match="Python adapter"):
         load(repo)
 
 

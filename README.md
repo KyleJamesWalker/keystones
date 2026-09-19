@@ -232,6 +232,34 @@ The two must agree with the marker; editing one without the other is [C14].
 
 `hash=text` has no AST, so it only goes with `keystone(file, ...)` or a region.
 
+### Saying it once instead of on every marker
+
+Most repos have one answer for a file type. A repo whose `.sql` is all dbt says
+so once, and no marker in it needs a qualifier:
+
+```toml
+[[tool.keystones.language]]
+extensions = [".sql"]
+hash = "text"
+```
+
+A repo on one SQL dialect points the extension at a different shipped spec,
+without restating its node types:
+
+```toml
+[[tool.keystones.language]]
+builtin = "sql_bigquery"
+extensions = [".sql"]
+```
+
+Precedence is **marker qualifier, then config table, then auto-detect**. A table
+may take an extension a builtin owns, because a table in a CODEOWNERS-guarded
+pyproject.toml is the opposite of a silent rebinding; two tables claiming one
+extension is still refused, and `.py` cannot be reassigned at all.
+
+Changing the table re-gates every keystone under it, which is a real change and
+is reported as [C14] rather than passing quietly.
+
 ### Adding a language
 
 Any grammar `tree-sitter-language-pack` carries can be wired up from your own

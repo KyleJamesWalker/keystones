@@ -18,6 +18,7 @@ def _parsers():
 
 
 _CACHE: tuple | None = None
+_DEFAULT_KIND: dict[str, str] = {}
 
 
 def parsers() -> tuple:
@@ -29,13 +30,20 @@ def parsers() -> tuple:
 
 def configure(cfg) -> None:
     """Install this repo's configured languages. Call once, after loading config."""
-    global _CACHE
+    global _CACHE, _DEFAULT_KIND
     from keystones.adapters import treesitter
 
-    treesitter.install_user_specs(
-        tuple(treesitter.spec_from_config(lang) for lang in cfg.languages)
-    )
+    specs = [treesitter.spec_from_config(lang) for lang in cfg.languages]
+    treesitter.install_user_specs(tuple(s for s in specs if s is not None))
+    _DEFAULT_KIND = {
+        ext: lang.hash for lang in cfg.languages if lang.hash for ext in lang.extensions
+    }
     _CACHE = None
+
+
+def default_kind(path: str) -> str | None:
+    """The basis this repo chose for these files, if it chose one."""
+    return _DEFAULT_KIND.get(Path(path).suffix)
 
 
 class UnknownKind(Exception):
@@ -51,7 +59,11 @@ def kinds_for(path: str, exclude: str | None = None) -> tuple[str, ...]:
     Text is always available; it is what a file with no parser already gets.
     """
     parsed = for_path(path, allow_fallback=False)
-    kinds = (TEXT_KIND,) if parsed is None else (parsed.kind_for_path(path), TEXT_KIND)
+    kinds = [TEXT_KIND] if parsed is None else [parsed.kind_for_path(path), TEXT_KIND]
+    chosen = default_kind(path)
+    if chosen in kinds:
+        kinds.remove(chosen)
+        kinds.insert(0, chosen)
     return tuple(k for k in kinds if k != exclude)
 
 

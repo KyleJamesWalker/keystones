@@ -7,6 +7,7 @@ fleet on the same morning.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import textwrap
 import warnings
@@ -118,6 +119,14 @@ SPECS: tuple[LanguageSpec, ...] = (
         line_comment="#",
     ),
     LanguageSpec(
+        language="sql_bigquery",
+        extensions=(),
+        definitions=frozenset({"create_table_statement", "cte"}),
+        name_fields=(),
+        label_children=("identifier",),
+        line_comment="--",
+    ),
+    LanguageSpec(
         language="sql",
         extensions=(".sql",),
         definitions=frozenset(
@@ -135,8 +144,16 @@ SPECS: tuple[LanguageSpec, ...] = (
 _BY_EXTENSION = {ext: spec for spec in SPECS for ext in spec.extensions}
 
 
-def spec_from_config(language) -> LanguageSpec:
-    """Build a spec from one validated `[[tool.keystones.language]]` table."""
+def spec_from_config(language) -> LanguageSpec | None:
+    """Build a spec from one validated `[[tool.keystones.language]]` table.
+
+    None when the table declares no parser: it is only setting a default basis.
+    """
+    if language.builtin is not None:
+        shipped = next(s for s in SPECS if s.language == language.builtin)
+        return dataclasses.replace(shipped, extensions=language.extensions)
+    if language.grammar is None:
+        return None
     optional = {
         field: getattr(language, field)
         for field in (
@@ -299,6 +316,12 @@ def _normalise_leaf(node, spec: LanguageSpec) -> str | None:
         except ValueError:
             return f"number:{text}"
         return f"number:{value!r}"
+    # An anonymous leaf is a literal from the grammar, so its type is the only
+    # spelling that can produce it. Folding is a no-op where the grammar is
+    # case-sensitive and the whole point where it is not, as in BigQuery SQL,
+    # whose keywords are anonymous `SELECT` rather than a named keyword node.
+    if not node.is_named and text.isalpha():
+        return f"{node.type}:{text.lower()!r}"
     return f"{node.type}:{text!r}"
 
 

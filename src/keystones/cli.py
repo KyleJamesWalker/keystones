@@ -188,6 +188,9 @@ def _chosen_basis(rel: str, src: str, preferred, kind: str | None, scope: Scope)
                 "for a whole-file keystone, or write a region by hand."
             )
         return adapters.for_kind(rel, kind)
+    chosen = adapters.default_kind(rel)
+    if chosen is not None:
+        return adapters.for_kind(rel, chosen)
     try:
         preferred.markers(rel, src)
     except ResolutionError as exc:

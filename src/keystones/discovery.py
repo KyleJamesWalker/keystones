@@ -148,14 +148,20 @@ def _adapter_for(rel: str, marker: Marker, preferred, readable: bool):
     Recorded rather than re-derived, so a grammar that starts reading a file it
     could not read before does not silently move that file's hash basis.
     """
-    if marker.hash_kind is not None:
-        if marker.hash_kind == adapters.TEXT_KIND and marker.scope is Scope.NODE:
-            raise adapters.UnknownKind(
-                f"{rel}:{marker.lineno}: '{marker.id}' asks for hash=text, which "
-                "has no nodes to attach to. Use keystone(file, hash=text) or a "
-                "keystone:start / keystone:end region."
+    kind = marker.hash_kind or adapters.default_kind(rel)
+    if kind is not None:
+        if kind == adapters.TEXT_KIND and marker.scope is Scope.NODE:
+            where = (
+                "asks for hash=text"
+                if marker.hash_kind
+                else f"gets hash=text from [[tool.keystones.language]] for {rel}"
             )
-        return adapters.for_kind(rel, marker.hash_kind)
+            raise adapters.UnknownKind(
+                f"{rel}:{marker.lineno}: '{marker.id}' {where}, which has no "
+                "nodes to attach to. Use keystone(file, hash=text), a "
+                "keystone:start / keystone:end region, or hash= to override."
+            )
+        return adapters.for_kind(rel, kind)
     if readable:
         return preferred
     raise adapters.UnknownKind(
