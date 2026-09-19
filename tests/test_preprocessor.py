@@ -4,6 +4,7 @@ import pytest
 
 from keystones import adapters
 from keystones.adapters import treesitter as ts
+from keystones.adapters.base import ResolutionError
 from keystones.config import ConfigError, load
 
 pytestmark = pytest.mark.skipif(not ts.available(), reason="needs the 'all' extra")
@@ -181,3 +182,12 @@ def test_a_masked_span_outside_the_target_does_not_trip_it(repo, run_cli):
     path = repo / "rev.sql"
     path.write_text(path.read_text() + "\nselect * from <<ref('elsewhere')>>;\n")
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_masking_is_shared_between_adapters():
+    """Both adapters must hold a plugin to the same contract, from one place."""
+    from keystones.adapters import masking
+
+    assert masking.preprocessed(None, "a\nb") == ("a\nb", "")
+    assert issubclass(masking.ContractError, ResolutionError)
+    assert issubclass(masking.PreprocessorRefused, ResolutionError)

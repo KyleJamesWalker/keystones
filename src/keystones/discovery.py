@@ -10,7 +10,8 @@ from keystones import adapters
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
 from keystones.adapters.base import ResolutionError
-from keystones.adapters.treesitter import ContractError, Unavailable
+from keystones.adapters.masking import ContractError
+from keystones.adapters.treesitter import Unavailable
 from keystones.config import Config
 from keystones.markers import MarkerError, RegionError
 from keystones.models import Finding, Marker, Scope, Severity, Target

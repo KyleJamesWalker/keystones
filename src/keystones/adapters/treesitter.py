@@ -17,9 +17,13 @@ from functools import cache
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
 from keystones.adapters.base import ResolutionError
+from keystones.adapters.masking import (  # noqa: F401
+    ContractError,
+    PreprocessorRefused,
+    preprocessed,
+)
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
-from keystones.preprocess import Refused
 
 SERIALIZER_VERSION = 2
 
@@ -279,41 +283,8 @@ def hasher_id_for(spec: LanguageSpec) -> str:
     )
 
 
-class ContractError(ResolutionError):
-    """A preprocessor broke the contract it is held to."""
-
-
-class PreprocessorRefused(ResolutionError):
-    """The plugin declined this file, which is a supported answer."""
-
-
-def preprocessed(spec: LanguageSpec, src: str) -> tuple[str, str]:
-    """Run the plugin, holding it to the line-preservation contract.
-
-    A plugin that shifts lines corrupts every target in the file, silently and
-    in a way that looks like the code moved. Counting lines is nearly free, so
-    this is checked rather than documented.
-    """
-    if spec.preprocessor is None:
-        return src, ""
-    try:
-        masked, extra = spec.preprocessor.fn(src)
-    except Refused as exc:
-        raise PreprocessorRefused(
-            f"{spec.preprocessor.path} refused this file: {exc}"
-        ) from exc
-    if masked.count("\n") != src.count("\n"):
-        raise ContractError(
-            f"preprocessor {spec.preprocessor.path} changed the line count of "
-            f"this file, from {src.count(chr(10)) + 1} lines to "
-            f"{masked.count(chr(10)) + 1}. Targets are line numbers, so a mask "
-            "has to be line-preserving."
-        )
-    return masked, extra
-
-
 def _parse(spec: LanguageSpec, src: str, strict: bool = True):
-    src, _ = preprocessed(spec, src)
+    src, _ = preprocessed(spec.preprocessor, src)
     tree = _parser(spec.language).parse(src.encode("utf-8"))
     if strict and tree.root_node.has_error:
         raise ParseError(
@@ -595,7 +566,7 @@ def hashes(src: str, target: Target) -> tuple[str, str]:
     # Masked-out content is not an escape hatch: it is hashed verbatim. Taken
     # from the target's own lines, not the file's, or a span anywhere in the
     # file would trip every keystone in it.
-    extra = preprocessed(spec, canonical_source(src, target))[1]
+    extra = preprocessed(spec.preprocessor, canonical_source(src, target))[1]
     body = (rendered or "") + ("\n--masked--\n" + extra if extra else "")
     semantic = digest(body)
     return semantic, digest(body + "\n--comments--\n" + "\n".join(comments))
@@ -614,7 +585,7 @@ def hash_stored_source(source: str, target: str) -> str:
         return fallback.hash_stored_source(source, target)
     path = target.split("::")[0]
     spec = spec_for(path)
-    extra = preprocessed(spec, source)[1]
+    extra = preprocessed(spec.preprocessor, source)[1]
     suffix = "\n--masked--\n" + extra if extra else ""
     if "::" not in target:
         root = _parse(spec, source, strict=False).root_node
