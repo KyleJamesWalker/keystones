@@ -48,10 +48,15 @@ class Preprocessor:
     version: str
     fn: object
     path: str
+    options: tuple[tuple[str, object], ...] = ()
 
     @property
     def id(self) -> str:
         return f"{self.name}/{self.version}"
+
+    @property
+    def kwargs(self) -> dict:
+        return dict(self.options)
 
 
 @dataclass(frozen=True)
@@ -136,13 +141,47 @@ def _strs(table: dict, key: str, where: str) -> list[str]:
     return value
 
 
+def _plugin_ref(value: object, where: str, key: str) -> tuple[str, dict]:
+    """`"pkg:attr"` or `{ plugin = "pkg:attr", ... }`; the rest are options."""
+    if isinstance(value, str):
+        return value, {}
+    if not isinstance(value, dict) or not isinstance(value.get("plugin"), str):
+        raise ConfigError(
+            f"{where}: {key} must be a string 'module:attribute' or a table "
+            f'with a plugin key, such as {key} = {{ plugin = "pkg:attr" }}'
+        )
+    return value["plugin"], {k: v for k, v in value.items() if k != "plugin"}
+
+
+def _check_call(fn, options: dict, where: str, key: str, *positional) -> None:
+    """Bind the options now, so a typo is a config error and not a traceback."""
+    import inspect
+
+    try:
+        inspect.signature(fn).bind(*positional, **options)
+    except TypeError as exc:
+        raise ConfigError(
+            f"{where}: {key} does not accept these options: {exc}"
+        ) from exc
+
+
+def options_digest(*option_sets: tuple[tuple[str, object], ...]) -> str:
+    import hashlib
+
+    payload = "|".join(
+        ",".join(f"{k}={v!r}" for k, v in options) for options in option_sets
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _builtin_specs() -> dict[str, object]:
     from keystones.adapters import treesitter
 
     return {spec.language: spec for spec in treesitter.SPECS}
 
 
-def _preprocessor(spec: str, where: str) -> Preprocessor:
+def _preprocessor(spec: str, options: dict, where: str) -> Preprocessor:
+    import functools
     from importlib import import_module
 
     if spec.count(":") != 1 or not all(spec.split(":")):
@@ -172,11 +211,13 @@ def _preprocessor(spec: str, where: str) -> Preprocessor:
             f"{where}: '{module_name}' does not declare {', '.join(missing)}. "
             "A preprocessor's name and version are part of the hash identity."
         )
+    _check_call(fn, options, where, "preprocessor", "")
     return Preprocessor(
         name=str(module.KEYSTONES_PREPROCESSOR_NAME),
         version=str(module.KEYSTONES_PREPROCESSOR_VERSION),
-        fn=fn,
+        fn=functools.partial(fn, **options) if options else fn,
         path=spec,
+        options=tuple(sorted(options.items())),
     )
 
 
@@ -258,9 +299,8 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
                 f"{where}: a preprocessor needs a grammar or builtin to feed; it "
                 "masks text so a parser can read it."
             )
-        if not isinstance(table["preprocessor"], str):
-            raise ConfigError(f"{where}: preprocessor must be a string")
-        preprocessor = _preprocessor(table["preprocessor"], where)
+        ref, options = _plugin_ref(table["preprocessor"], where, "preprocessor")
+        preprocessor = _preprocessor(ref, options, where)
 
     default_hash = table.get("hash")
     if default_hash is not None:

@@ -19,13 +19,15 @@ SPAN = re.compile(r"<<(.*?)>>")
 BARE = re.compile(r"(?m)^[ \t]*<<(.*?)>>[ \t]*$")
 
 
-def preprocess(src: str) -> tuple[str, str]:
+def preprocess(src: str, *, upper: bool = False) -> tuple[str, str]:
     if "REFUSE" in src:
         raise Refused("this file uses a construct the fake plugin cannot mask")
     spans: list[str] = []
 
     def take(match: re.Match) -> str:
         body = " ".join(match.group(1).split())
+        if upper:
+            body = body.upper()
         spans.append(body)
         # Content-derived, so a slice renders the same as the whole file.
         return "__ks_" + hashlib.sha256(body.encode()).hexdigest()[:8]

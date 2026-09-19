@@ -22,6 +22,7 @@ from keystones.adapters.masking import (  # noqa: F401
     PreprocessorRefused,
     preprocessed,
 )
+from keystones.config import options_digest
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
@@ -261,6 +262,7 @@ def _spec_digest(spec: LanguageSpec) -> str:
             ",".join(spec.label_children),
             ",".join(spec.fold_case),
             spec.preprocessor.id if spec.preprocessor else "",
+            options_digest(spec.preprocessor.options) if spec.preprocessor else "",
         )
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
