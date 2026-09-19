@@ -20,6 +20,8 @@ BARE = re.compile(r"(?m)^[ \t]*<<(.*?)>>[ \t]*$")
 
 
 def preprocess(src: str, *, upper: bool = False) -> tuple[str, str]:
+    if not isinstance(upper, bool):
+        raise ValueError(f"upper must be true or false, not {upper!r}")
     if "REFUSE" in src:
         raise Refused("this file uses a construct the fake plugin cannot mask")
     spans: list[str] = []

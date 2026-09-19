@@ -62,3 +62,10 @@ def test_options_are_part_of_the_hasher(repo):
     configure(repo, TABLE_FORM)
     upper = ts.hasher_id_for(ts.spec_from_config(load(repo).languages[0]))
     assert plain != upper
+
+
+def test_an_option_value_the_plugin_rejects_is_a_config_error(repo):
+    """Bound at load by a probe with empty text, so no file is touched first."""
+    configure(repo, TABLE_FORM.replace("upper = true", 'upper = "loud"'))
+    with pytest.raises(ConfigError, match="upper must be true or false"):
+        load(repo)

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
+from keystones.preprocess import Refused
+
 DEFAULT_EXCLUDE_DIRS = (".git", "node_modules", "vendor", "generated")
 
 # What a builtin spec fixes; a table may only take one whole or declare its own.
@@ -224,10 +226,21 @@ def _preprocessor(spec: str, options: dict, where: str) -> Preprocessor:
             "A preprocessor's name and version are part of the hash identity."
         )
     _check_call(fn, options, where, "preprocessor", "")
+    bound = functools.partial(fn, **options) if options else fn
+    try:
+        # Empty text is the one input every mask must accept; it proves the
+        # option values before any file does.
+        bound("")
+    except Refused:
+        pass
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            f"{where}: preprocessor '{spec}' rejected its options: {exc}"
+        ) from exc
     return Preprocessor(
         name=str(module.KEYSTONES_PREPROCESSOR_NAME),
         version=str(module.KEYSTONES_PREPROCESSOR_VERSION),
-        fn=functools.partial(fn, **options) if options else fn,
+        fn=bound,
         path=spec,
         options=tuple(sorted(options.items())),
     )

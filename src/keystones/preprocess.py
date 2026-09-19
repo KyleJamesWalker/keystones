@@ -29,6 +29,11 @@ differently depending on what precedes it.
 still gated. Normalise it - strip the whitespace a formatter owns - or every
 reformat inside a masked span reads as a change.
 
+Options from the table are passed as keyword arguments. Keystones calls the
+bound function once with empty text when it loads the config, so raise
+`ValueError` for an option value you cannot take and it is reported as a
+config error before any file is touched.
+
 Raise `Refused` for a file the plugin cannot handle safely. Refusing is the
 right answer where masking would produce a tree that parses but means something
 else; keystones reports it and points at `hash=text`, and never quietly
