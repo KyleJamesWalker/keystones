@@ -274,9 +274,9 @@ preprocessor = "keystones_dbt:preprocess"
 ```
 
 The plugin is an ordinary `pip install`, and the dialect is yours to pick - the
-preprocessor never knows which SQL grammar it is feeding. The `hash` kind then
-names the plugin rather than the grammar, because a reviewer needs to know a
-plugin is in play; `hasher` carries both:
+preprocessor never knows which grammar or parser it is feeding. The `hash` kind
+then names the plugin rather than the grammar, because a reviewer needs to know
+a plugin is in play; `hasher` carries both:
 
 ```toml
 hash = "dbt"
@@ -287,6 +287,32 @@ Masked content is hashed verbatim, so a template expression is not a hole in
 the gate, and a plugin may refuse a file it cannot handle safely rather than
 guess. A refusal is reported and points at `hash=text`; it never silently
 downgrades. See `keystones/preprocess.py` for the contract.
+
+### A parser the pack does not have, via a plugin
+
+A grammar pack covers common languages, not every dialect. A parser plugin
+supplies the tree itself, and keystones does the rest: discovery, resolution,
+hashing, the sidecar and C5.
+
+```toml
+[[tool.keystones.language]]
+extensions = [".sql"]
+parser = { plugin = "keystones_dbt.parsers:sqlglot", dialect = "snowflake" }
+preprocessor = { plugin = "keystones_dbt:preprocess", control_flow = "first-branch" }
+```
+
+`plugin` names a factory; every other key in the table is passed to it, so a
+project's choices live in its own `pyproject.toml` and a misspelt option is a
+config error naming the table. Options are part of the hasher, so changing one
+is a migration rather than drift:
+
+```toml
+hash = "dbt"
+hasher = "keystones-plugin/1+sqlglot@30.18.0/snowflake/9f1c0b2a7d3e+dbt/1"
+```
+
+Both keys also take the plain string form when there is nothing to configure.
+See `keystones/parser.py` for the contract a plugin implements.
 
 ### Adding a language
 
