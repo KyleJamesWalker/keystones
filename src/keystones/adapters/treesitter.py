@@ -155,8 +155,11 @@ _BY_EXTENSION = {ext: spec for spec in SPECS for ext in spec.extensions}
 def spec_from_config(language) -> LanguageSpec | None:
     """Build a spec from one validated `[[tool.keystones.language]]` table.
 
-    None when the table declares no parser: it is only setting a default basis.
+    None when the table declares no grammar: it is only setting a default
+    basis, or a parser plugin owns it.
     """
+    if language.parser is not None:
+        return None
     if language.builtin is not None:
         shipped = next(s for s in SPECS if s.language == language.builtin)
         return dataclasses.replace(

@@ -17,7 +17,6 @@ SPEC_SHAPE_KEYS = frozenset(
         "name_fields",
         "wrappers",
         "label_children",
-        "line_comment",
         "fold_case",
     }
 )
@@ -36,6 +35,7 @@ LANGUAGE_KEYS = frozenset(
         "builtin",
         "hash",
         "preprocessor",
+        "parser",
     }
 )
 
@@ -60,6 +60,17 @@ class Preprocessor:
 
 
 @dataclass(frozen=True)
+class ParserPlugin:
+    """A resolved parser factory, already called with its options."""
+
+    name: str
+    identity: str
+    parser: object
+    path: str
+    options: tuple[tuple[str, object], ...] = ()
+
+
+@dataclass(frozen=True)
 class LanguageConfig:
     """One `[[tool.keystones.language]]` table, validated but not yet a spec.
 
@@ -76,6 +87,7 @@ class LanguageConfig:
     # The basis markers in these files get when they do not name one.
     hash: str | None = None
     preprocessor: Preprocessor | None = None
+    parser: ParserPlugin | None = None
     comments: frozenset[str] | None = None
     name_fields: tuple[str, ...] | None = None
     wrappers: frozenset[str] | None = None
@@ -221,6 +233,50 @@ def _preprocessor(spec: str, options: dict, where: str) -> Preprocessor:
     )
 
 
+def _parser_plugin(spec: str, options: dict, where: str) -> ParserPlugin:
+    from importlib import import_module
+
+    if spec.count(":") != 1 or not all(spec.split(":")):
+        raise ConfigError(f"{where}: parser '{spec}' must be written module:attribute")
+    module_name, attribute = spec.split(":")
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        raise ConfigError(
+            f"{where}: cannot import '{module_name}' for parser '{spec}'. "
+            "Is the plugin installed in the environment keystones runs in?"
+        ) from exc
+    factory = getattr(module, attribute, None)
+    if factory is None:
+        raise ConfigError(f"{where}: '{module_name}' has no attribute '{attribute}'")
+    if not callable(factory):
+        raise ConfigError(f"{where}: parser '{spec}' is not callable")
+    _check_call(factory, options, where, "parser")
+    try:
+        parser = factory(**options)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            f"{where}: parser '{spec}' rejected its options: {exc}"
+        ) from exc
+    missing = [
+        attr
+        for attr in ("name", "identity", "parse", "parse_fragment")
+        if not getattr(parser, attr, None)
+    ]
+    if missing:
+        raise ConfigError(
+            f"{where}: the parser from '{spec}' lacks {', '.join(missing)}. "
+            "See keystones.parser for the contract."
+        )
+    return ParserPlugin(
+        name=str(parser.name),
+        identity=str(parser.identity),
+        parser=parser,
+        path=spec,
+        options=tuple(sorted(options.items())),
+    )
+
+
 def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfig:
     where = f"[[tool.keystones.language]] #{index + 1}"
     unknown = sorted(set(table) - LANGUAGE_KEYS)
@@ -236,6 +292,18 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
             f"{where}: grammar and builtin are alternatives. Use builtin to take "
             "a spec this package ships, grammar to declare one here."
         )
+    if "parser" in table and ("grammar" in table or "builtin" in table):
+        raise ConfigError(
+            f"{where}: parser is an alternative to grammar and builtin. A parser "
+            "plugin supplies the tree itself."
+        )
+    if "parser" in table:
+        shaped = sorted(SPEC_SHAPE_KEYS & set(table))
+        if shaped:
+            raise ConfigError(
+                f"{where}: {', '.join(shaped)} shape a tree-sitter grammar and do "
+                "not apply to a parser plugin."
+            )
 
     builtin = table.get("builtin")
     if builtin is not None:
@@ -245,7 +313,7 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
                 f"{where}: no builtin spec '{builtin}'. "
                 f"Available: {', '.join(sorted(shipped))}"
             )
-        fixed = sorted(SPEC_SHAPE_KEYS & set(table))
+        fixed = sorted((SPEC_SHAPE_KEYS | {"line_comment"}) & set(table))
         if fixed:
             raise ConfigError(
                 f"{where}: builtin '{builtin}' brings its own {', '.join(fixed)}. "
@@ -257,10 +325,13 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
         raise ConfigError(f"{where}: grammar must be a non-empty string")
     if grammar is not None and "definitions" not in table:
         raise ConfigError(f"{where}: missing required key definitions")
-    named = grammar or builtin
-    where = (
-        f"{where} ({'grammar' if grammar else 'builtin'} '{named}')" if named else where
-    )
+    parser = None
+    if "parser" in table:
+        ref, options = _plugin_ref(table["parser"], where, "parser")
+        parser = _parser_plugin(ref, options, where)
+    named = grammar or builtin or (parser.name if parser else None)
+    label = "grammar" if grammar else "builtin" if builtin else "parser"
+    where = f"{where} ({label} '{named}')" if named else where
 
     extensions = _strs(table, "extensions", where)
     if not extensions:
@@ -296,7 +367,8 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
     if "preprocessor" in table:
         if named is None:
             raise ConfigError(
-                f"{where}: a preprocessor needs a grammar or builtin to feed; it "
+                f"{where}: a preprocessor needs a grammar, builtin or parser to "
+                "feed; it "
                 "masks text so a parser can read it."
             )
         ref, options = _plugin_ref(table["preprocessor"], where, "preprocessor")
@@ -333,6 +405,7 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
         builtin=builtin,
         hash=default_hash,
         preprocessor=preprocessor,
+        parser=parser,
         **optional,
     )
 
