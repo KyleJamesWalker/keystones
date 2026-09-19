@@ -41,7 +41,7 @@ def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Ou
         rel = entry.target.split("::")[0].split("#")[0]
         if adapters.needs_extra(rel):
             continue
-        adapter = adapters.for_path(rel)
+        adapter = adapters.for_entry(entry)
         expected = adapter.hasher_id_for_path(rel)
         if not entry.hasher or entry.hasher == expected:
             continue
@@ -98,6 +98,7 @@ def apply(cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]) -> int
         live = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(live, item.target)
         entry.hasher = outcome.new_hasher
+        entry.hash = item.adapter.kind_for_path(item.marker.path)
         entry.semantic = semantic
         entry.text = text
         entry.target = str(item.target)

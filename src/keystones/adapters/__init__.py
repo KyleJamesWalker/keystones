@@ -78,6 +78,24 @@ def for_kind(path: str, kind: str):
     )
 
 
+def for_entry(entry):
+    """The adapter an entry was hashed with, by the basis it recorded.
+
+    Routing by extension would check a text keystone against the grammar's
+    hasher and skip it as migrated. A recorded kind the file no longer offers
+    falls back to the extension's adapter: C14 names the disagreement, and
+    `migrate` is what resolves it.
+    """
+    rel = entry.target.split("::")[0].split("#")[0]
+    kind = entry.hash or default_kind(rel)
+    if kind is None:
+        return for_path(rel)
+    try:
+        return for_kind(rel, kind)
+    except UnknownKind:
+        return for_path(rel)
+
+
 def for_path(path: str, allow_fallback: bool = True):
     suffix = Path(path).suffix
     for adapter in parsers():

@@ -71,8 +71,9 @@ def c3_c4_hashes(
                     "C14",
                     severity,
                     f"keystone '{entry.id}' is recorded as hash={entry.hash} but "
-                    f"its marker gates on hash={actual_kind}. One of the two was "
-                    "edited without the other; make them agree.",
+                    f"its marker gates on hash={actual_kind}. If pyproject.toml "
+                    "changed, `keystones migrate` moves it; otherwise one of the "
+                    "two was edited without the other, so make them agree.",
                     item.marker.path,
                     item.marker.lineno,
                     owner_hint=entry.category,
@@ -159,7 +160,7 @@ def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
         rel = entry.target.split("::")[0].split("#")[0]
         if adapters.needs_extra(rel):
             continue
-        adapter = adapters.for_path(rel)
+        adapter = adapters.for_entry(entry)
         if entry.hasher and entry.hasher != adapter.hasher_id_for_path(rel):
             continue
         try:
