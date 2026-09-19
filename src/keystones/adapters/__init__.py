@@ -9,9 +9,11 @@ from keystones.adapters import python as python_adapter
 
 
 def _parsers():
-    parsers = [python_adapter]
-    from keystones.adapters import treesitter
+    from keystones.adapters import plugin, treesitter
 
+    parsers = [python_adapter]
+    if plugin.extensions:
+        parsers.append(plugin)
     if treesitter.available():
         parsers.append(treesitter)
     return tuple(parsers)
@@ -31,10 +33,22 @@ def parsers() -> tuple:
 def configure(cfg) -> None:
     """Install this repo's configured languages. Call once, after loading config."""
     global _CACHE, _DEFAULT_KIND
-    from keystones.adapters import treesitter
+    from keystones.adapters import plugin, treesitter
 
     specs = [treesitter.spec_from_config(lang) for lang in cfg.languages]
     treesitter.install_user_specs(tuple(s for s in specs if s is not None))
+    plugin.install(
+        tuple(
+            plugin.PluginSpec(
+                extensions=lang.extensions,
+                parser=lang.parser,
+                preprocessor=lang.preprocessor,
+                line_comment=lang.line_comment or "#",
+            )
+            for lang in cfg.languages
+            if lang.parser is not None
+        )
+    )
     _DEFAULT_KIND = {
         ext: lang.hash for lang in cfg.languages if lang.hash for ext in lang.extensions
     }
@@ -110,9 +124,12 @@ def needs_extra(path: str) -> bool:
     Falling through to the text adapter here would compute a different hash and
     report the keystone as drifted, which is a lie about the code.
     """
-    from keystones.adapters import treesitter
+    from keystones.adapters import plugin, treesitter
 
-    return Path(path).suffix in treesitter.extensions and not treesitter.available()
+    suffix = Path(path).suffix
+    if suffix in plugin.extensions:
+        return False
+    return suffix in treesitter.extensions and not treesitter.available()
 
 
 def parsed_extensions() -> tuple[str, ...]:
