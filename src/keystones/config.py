@@ -9,6 +9,19 @@ from pathlib import Path, PurePosixPath
 
 DEFAULT_EXCLUDE_DIRS = (".git", "node_modules", "vendor", "generated")
 
+# What a builtin spec fixes; a table may only take one whole or declare its own.
+SPEC_SHAPE_KEYS = frozenset(
+    {
+        "definitions",
+        "comments",
+        "name_fields",
+        "wrappers",
+        "label_children",
+        "line_comment",
+        "fold_case",
+    }
+)
+
 LANGUAGE_KEYS = frozenset(
     {
         "grammar",
@@ -191,9 +204,11 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
                 f"{where}: no builtin spec '{builtin}'. "
                 f"Available: {', '.join(sorted(shipped))}"
             )
-        if "definitions" in table:
+        fixed = sorted(SPEC_SHAPE_KEYS & set(table))
+        if fixed:
             raise ConfigError(
-                f"{where}: builtin '{builtin}' brings its own definitions"
+                f"{where}: builtin '{builtin}' brings its own {', '.join(fixed)}. "
+                "Declare the spec with grammar to change them."
             )
 
     grammar = table.get("grammar")

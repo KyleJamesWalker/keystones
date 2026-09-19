@@ -172,3 +172,27 @@ def test_config_languages_do_not_leak_between_repos(repo, run_cli, tmp_path):
     (other / "pyproject.toml").write_text('[tool.keystones]\nroot = "keystones"\n')
     adapters.configure(load(other))
     assert adapters.for_path("x.bqsql") is fallback
+
+
+# --- config keys a builtin cannot take ---------------------------------------
+
+
+BUILTIN_SQL = '[[tool.keystones.language]]\nbuiltin = "sql"\nextensions = [".sql"]\n'
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("comments", '["comment"]'),
+        ("wrappers", '["x"]'),
+        ("name_fields", '["name"]'),
+        ("label_children", '["identifier"]'),
+        ("fold_case", '["keyword_"]'),
+        ("line_comment", '"--"'),
+    ],
+)
+def test_a_builtin_table_refuses_spec_shaping_keys(repo, key, value):
+    """A key that silently did nothing would be worse than an unknown one."""
+    configure(repo, f"\n{BUILTIN_SQL}{key} = {value}\n")
+    with pytest.raises(ConfigError, match=f"builtin.*{key}"):
+        load(repo)
