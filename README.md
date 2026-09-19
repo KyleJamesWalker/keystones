@@ -188,11 +188,168 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | TypeScript, TSX, JavaScript | function, method, class, interface, type alias, region, file | yes, tree-sitter |
 | Go | func, method, type, const, region, file | yes, tree-sitter |
 | Terraform, HCL | block, region, file | yes, tree-sitter |
+| SQL | view, table, function, CTE, region, file | yes, tree-sitter |
 | everything else | region, file | no, normalised text |
 
+### Choosing what a keystone is hashed on
+
+Most files have one answer and you never think about it: Python gets its AST,
+`.yaml` gets normalised text. A file the parser cannot read is the exception,
+and templated SQL is the common case:
+
+```sql
+{{ config(materialized='incremental') }}
+select
+    order_id,
+-- keystone:start(finance, hash=text): revenue-recognition
+    amount * 0.97 as net_revenue
+-- keystone:end
+from {{ ref('orders') }}
+```
+
+`keystones add` refuses to pick for you when the preferred parser fails:
+
+```
+models/revenue.sql:4: error: [kind] 'revenue-recognition' has no basis to be
+hashed with. models/revenue.sql does not parse as sql, so say which with a
+hash= qualifier: hash=text
+```
+
+The choice lands in the marker and in the sidecar, and `check` reads it rather
+than re-deriving it from the file extension. That matters: without it, a
+grammar bump that starts reading a file it could not read before would silently
+move that file's hash basis and report drift on code nobody touched.
+
+```toml
+target = "models/revenue.sql#L5-L5"
+hash   = "text"
+hasher = "keystones-text/1"
+```
+
+`hash` is the choice a person made and does not move. `hasher` is the exact
+basis, including grammar and spec versions, and is what `migrate` reconciles.
+The two must agree with the marker; editing one without the other is [C14].
+
+`hash=text` has no AST, so it only goes with `keystone(file, ...)` or a region.
+
+### Saying it once instead of on every marker
+
+Most repos have one answer for a file type. A repo whose `.sql` is all dbt says
+so once, and no marker in it needs a qualifier:
+
+```toml
+[[tool.keystones.language]]
+extensions = [".sql"]
+hash = "text"
+```
+
+A repo on one SQL dialect points the extension at a different shipped spec,
+without restating its node types:
+
+```toml
+[[tool.keystones.language]]
+builtin = "sql_bigquery"
+extensions = [".sql"]
+```
+
+Precedence is **marker qualifier, then config table, then auto-detect**. A table
+may take an extension a builtin owns, because a table in a CODEOWNERS-guarded
+pyproject.toml is the opposite of a silent rebinding; two tables claiming one
+extension is still refused, and `.py` cannot be reassigned at all.
+
+Changing the table re-gates every keystone under it, which is a real change and
+is reported as [C14] rather than passing quietly.
+
+### Templated files, via a plugin
+
+A grammar cannot read a templating layer. dbt models are the case: Jinja turns
+a model into ERROR nodes, and hashing an error-recovery tree is worse than
+refusing one. A preprocessor plugin masks the template so the residue parses:
+
+```toml
+[[tool.keystones.language]]
+builtin = "sql_bigquery"
+extensions = [".sql"]
+preprocessor = "keystones_dbt:preprocess"
+```
+
+The plugin is an ordinary `pip install`, and the dialect is yours to pick - the
+preprocessor never knows which grammar or parser it is feeding. The `hash` kind
+then names the plugin rather than the grammar, because a reviewer needs to know
+a plugin is in play; `hasher` carries both:
+
+```toml
+hash = "dbt"
+hasher = "keystones-ts/2+sql_bigquery@1.20.0/a1b2c3d4e5f6+dbt/1"
+```
+
+Masked content is hashed verbatim, so a template expression is not a hole in
+the gate, and a plugin may refuse a file it cannot handle safely rather than
+guess. A refusal is reported and points at `hash=text`; it never silently
+downgrades. See `keystones/preprocess.py` for the contract.
+
+### A parser the pack does not have, via a plugin
+
+A grammar pack covers common languages, not every dialect. A parser plugin
+supplies the tree itself, and keystones does the rest: discovery, resolution,
+hashing, the sidecar and C5.
+
+```toml
+[[tool.keystones.language]]
+extensions = [".sql"]
+parser = { plugin = "keystones_dbt.parsers:sqlglot", dialect = "snowflake" }
+preprocessor = { plugin = "keystones_dbt:preprocess", control_flow = "first-branch" }
+```
+
+`plugin` names a factory; every other key in the table is passed to it, so a
+project's choices live in its own `pyproject.toml` and a misspelt option is a
+config error naming the table. Options are part of the hasher, so changing one
+is a migration rather than drift:
+
+```toml
+hash = "dbt"
+hasher = "keystones-plugin/1+sqlglot@30.18.0/snowflake/9f1c0b2a7d3e+dbt/1"
+```
+
+Both keys also take the plain string form when there is nothing to configure.
+See `keystones/parser.py` for the contract a plugin implements.
+
+### Adding a language
+
+Any grammar `tree-sitter-language-pack` carries can be wired up from your own
+pyproject.toml, without waiting for a release here:
+
+```toml
+[[tool.keystones.language]]
+grammar = "sql"          # the pack's name for the grammar
+extensions = [".sql"]
+definitions = ["create_view", "create_table", "cte"]
+name_fields = []         # SQL names are not in a `name` field
+label_children = ["identifier", "object_reference"]
+line_comment = "--"
+```
+
+`grammar`, `extensions` and `definitions` are required; everything else falls
+back to the defaults the builtin specs use. An unknown key is an error rather
+than a no-op, because a typo would otherwise build a spec that silently matches
+nothing. One extension has one parser, so a table cannot take `.ts` from the
+builtins or an extension another table already claimed.
+
+The table decides the hash basis, so put pyproject.toml in CODEOWNERS alongside
+the sidecars. Editing it reads as a hasher change, not as drift: `migrate`
+proves the entries across whatever the edit did not actually move.
+
 tree-sitter languages need the `all` extra, which declares a range rather than
-a pin. The grammar version is recorded in each entry's hasher id, and that, not
-the install requirement, is what makes hashes deterministic.
+a pin. Each entry's hasher id records the grammar version and a digest of the
+language spec that produced the hash:
+
+```
+keystones-ts/2+typescript@1.20.0/4957071ba1a6
+```
+
+That, not the install requirement, is what makes hashes deterministic. The spec
+digest covers only the fields the serialiser reads, so editing a comment leader
+or adding a file extension costs nobody a migration.
 
 A version difference is only reported when it actually matters. On a mismatch
 the hash is recomputed first: if it still reproduces, the grammar emits the same

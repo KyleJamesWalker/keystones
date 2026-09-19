@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
+from keystones.adapters.base import ResolutionError
 from keystones.config import Config
 from keystones.discovery import Resolved
 from keystones.models import Entry, Finding, Severity
@@ -62,10 +63,41 @@ def c3_c4_hashes(
         entry = entries.get(item.marker.id)
         if entry is None:
             continue
+        # The basis is recorded in two places on purpose, so editing one and
+        # not the other is caught instead of quietly re-gating the keystone.
+        actual_kind = item.adapter.kind_for_path(item.marker.path)
+        if entry.hash and entry.hash != actual_kind:
+            out.append(
+                Finding(
+                    "C14",
+                    severity,
+                    f"keystone '{entry.id}' is recorded as hash={entry.hash} but "
+                    f"its marker gates on hash={actual_kind}. If pyproject.toml "
+                    "changed, `keystones migrate` moves it; otherwise one of the "
+                    "two was edited without the other, so make them agree.",
+                    item.marker.path,
+                    item.marker.lineno,
+                    owner_hint=entry.category,
+                )
+            )
+            continue
         expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
         rehashed = entry.hasher and entry.hasher != expected_hasher
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
-        semantic, text = item.adapter.hashes(src, item.target)
+        try:
+            semantic, text = item.adapter.hashes(src, item.target)
+        except ResolutionError as exc:
+            out.append(
+                Finding(
+                    "resolve",
+                    severity,
+                    f"keystone '{entry.id}' cannot be hashed: {exc}",
+                    item.marker.path,
+                    item.marker.lineno,
+                    owner_hint=entry.category,
+                )
+            )
+            continue
         target = str(item.target)
         fix_hint = f'run `keystones fix --id {entry.id} -m "<why it changed>"`'
 
@@ -142,7 +174,7 @@ def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
         rel = entry.target.split("::")[0].split("#")[0]
         if adapters.needs_extra(rel):
             continue
-        adapter = adapters.for_path(rel)
+        adapter = adapters.for_entry(entry)
         if entry.hasher and entry.hasher != adapter.hasher_id_for_path(rel):
             continue
         try:

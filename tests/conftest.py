@@ -6,6 +6,8 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
+# Stand-in plugins live here, imported by the same path string a real one uses.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +18,17 @@ def plain_output(monkeypatch):
     running on a runner.
     """
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def builtin_languages_only():
+    """Configured languages install into module globals; unpick them after."""
+    from keystones.adapters import treesitter
+
+    original = treesitter.SPECS
+    yield
+    treesitter.SPECS = original
+    treesitter.install_user_specs(())
 
 
 @pytest.fixture

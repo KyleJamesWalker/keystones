@@ -244,3 +244,7 @@ def duplicate_qualnames(path: str, src: str) -> set[str]:
 
 def comment_prefix(path: str) -> str:
     return "#"
+
+
+def kind_for_path(path: str) -> str:
+    return "python"

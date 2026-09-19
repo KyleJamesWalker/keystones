@@ -21,6 +21,9 @@ class Marker:
     scope: Scope
     path: str
     lineno: int
+    # Which basis gates this keystone. None means auto-detect, which is the
+    # only answer for a file whose extension has exactly one parser.
+    hash_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,9 @@ class Entry:
     hasher: str
     semantic: str
     text: str
+    # The kind the marker asked for: "text", a grammar name, or "" for an
+    # entry written before anyone had to choose.
+    hash: str = ""
     review_every: str | None = None
     depends: list[str] = field(default_factory=list)
     depends_hash: str = ""

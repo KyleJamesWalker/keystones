@@ -83,6 +83,7 @@ def parse(path: Path, category: str) -> Entry:
         id=path.stem,
         category=category,
         target=meta["target"],
+        hash=meta.get("hash", ""),
         hasher=meta["hasher"],
         semantic=meta["semantic"],
         text=meta["text"],
@@ -109,10 +110,13 @@ def _toml_value(value: object) -> str:
 def render(entry: Entry) -> str:
     meta = {
         "target": entry.target,
+        "hash": entry.hash,
         "hasher": entry.hasher,
         "semantic": entry.semantic,
         "text": entry.text,
     }
+    if not entry.hash:
+        del meta["hash"]
     if entry.review_every:
         meta["review_every"] = entry.review_every
     if entry.depends:

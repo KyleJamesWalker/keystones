@@ -7,6 +7,8 @@ fleet on the same morning.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import textwrap
 import warnings
 from dataclasses import dataclass
@@ -15,6 +17,12 @@ from functools import cache
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
 from keystones.adapters.base import ResolutionError
+from keystones.adapters.masking import (  # noqa: F401
+    ContractError,
+    PreprocessorRefused,
+    preprocessed,
+)
+from keystones.config import options_digest
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
@@ -23,6 +31,15 @@ SERIALIZER_VERSION = 2
 
 class Unavailable(Exception):
     """The `all` extra is not installed."""
+
+
+class ParseError(ResolutionError):
+    """The grammar could not read the file.
+
+    Hashing an error-recovery tree is worse than refusing one. Recovery shape
+    is the least stable part of a grammar's output, so the hash would move on a
+    pack bump with nobody having touched the file.
+    """
 
 
 @dataclass(frozen=True)
@@ -37,6 +54,11 @@ class LanguageSpec:
     wrappers: frozenset[str] = frozenset()
     label_children: tuple[str, ...] = ()
     line_comment: str = "//"
+    # Node-type prefixes whose text is case-insensitive. SQL keywords are the
+    # case: sqlfluff rewrites `select` to `SELECT` without changing meaning.
+    fold_case: tuple[str, ...] = ()
+    # A plugin that masks what this grammar cannot read. See keystones.preprocess.
+    preprocessor: object | None = None
 
 
 SPECS: tuple[LanguageSpec, ...] = (
@@ -104,9 +126,83 @@ SPECS: tuple[LanguageSpec, ...] = (
         label_children=("identifier", "string_lit"),
         line_comment="#",
     ),
+    LanguageSpec(
+        language="sql_bigquery",
+        extensions=(),
+        definitions=frozenset({"create_table_statement", "cte"}),
+        name_fields=(),
+        label_children=("identifier",),
+        line_comment="--",
+    ),
+    LanguageSpec(
+        language="sql",
+        extensions=(".sql",),
+        definitions=frozenset(
+            {"create_view", "create_table", "create_function", "cte"}
+        ),
+        # `marginalia` is this grammar's name for a /* */ block.
+        comments=frozenset({"comment", "marginalia"}),
+        name_fields=(),
+        label_children=("identifier", "object_reference"),
+        line_comment="--",
+        fold_case=("keyword_",),
+    ),
 )
 
 _BY_EXTENSION = {ext: spec for spec in SPECS for ext in spec.extensions}
+
+
+def spec_from_config(language) -> LanguageSpec | None:
+    """Build a spec from one validated `[[tool.keystones.language]]` table.
+
+    None when the table declares no grammar: it is only setting a default
+    basis, or a parser plugin owns it.
+    """
+    if language.parser is not None:
+        return None
+    if language.builtin is not None:
+        shipped = next(s for s in SPECS if s.language == language.builtin)
+        return dataclasses.replace(
+            shipped,
+            extensions=language.extensions,
+            preprocessor=language.preprocessor,
+        )
+    if language.grammar is None:
+        return None
+    optional_pre = (
+        {"preprocessor": language.preprocessor} if language.preprocessor else {}
+    )
+    optional = {
+        field: getattr(language, field)
+        for field in (
+            "comments",
+            "name_fields",
+            "wrappers",
+            "label_children",
+            "fold_case",
+        )
+        if getattr(language, field) is not None
+    }
+    if language.line_comment is not None:
+        optional["line_comment"] = language.line_comment
+    return LanguageSpec(
+        language=language.grammar,
+        extensions=language.extensions,
+        definitions=language.definitions,
+        **optional,
+        **optional_pre,
+    )
+
+
+def install_user_specs(specs: tuple[LanguageSpec, ...]) -> None:
+    """Rebuild extension routing from the builtins plus this repo's tables.
+
+    Always rebuilds from SPECS, never from the current map, so loading a second
+    repo drops the first one's languages instead of inheriting them.
+    """
+    global _BY_EXTENSION, extensions
+    _BY_EXTENSION = {ext: spec for spec in (*SPECS, *specs) for ext in spec.extensions}
+    extensions = tuple(_BY_EXTENSION)
 
 
 def spec_for(path: str) -> LanguageSpec | None:
@@ -141,16 +237,66 @@ def _parser(language: str):
         raise Unavailable(
             "tree-sitter support needs the extra: pip install 'keystones[all]'"
         ) from exc
-    return get_parser(language)
+    try:
+        return get_parser(language)
+    except Exception as exc:
+        # A configured grammar the pack does not carry. Left to escape, this
+        # surfaces as a traceback naming neither the grammar nor the table.
+        raise Unavailable(
+            f"no grammar '{language}' in tree-sitter-language-pack "
+            f"{_pack_version()}. Check the name against the pack's language "
+            "list, or drop the [[tool.keystones.language]] table for it."
+        ) from exc
+
+
+def _spec_digest(spec: LanguageSpec) -> str:
+    """Only the fields the serialiser reads, sorted: set order follows PYTHONHASHSEED.
+
+    Extensions and the comment leader are excluded on purpose. Neither can move
+    a hash, and billing every consumer a migration for a cosmetic edit is how a
+    gate gets uninstalled.
+    """
+    payload = "|".join(
+        (
+            ",".join(sorted(spec.definitions)),
+            ",".join(sorted(spec.comments)),
+            ",".join(spec.name_fields),
+            ",".join(sorted(spec.wrappers)),
+            ",".join(spec.label_children),
+            ",".join(spec.fold_case),
+            spec.preprocessor.id if spec.preprocessor else "",
+            options_digest(spec.preprocessor.options) if spec.preprocessor else "",
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def hasher_id_for(spec: LanguageSpec) -> str:
-    """Grammar version is part of the identity, so a bump is visible as one."""
-    return f"keystones-ts/{SERIALIZER_VERSION}+{spec.language}@{_pack_version()}"
+    """Grammar version and spec are both part of the identity.
+
+    The spec digest is what lets a language be defined outside this file: an
+    edit to it surfaces as a hasher mismatch that `migrate` can prove across,
+    rather than as drift in code nobody touched.
+    """
+    # The plugin is in the digest already; naming it here is so a person can
+    # see it without decoding a hash, and so a plugin that breaks its own
+    # hashes can be recognised rather than appearing to change by magic.
+    plugin = f"+{spec.preprocessor.id}" if spec.preprocessor else ""
+    return (
+        f"keystones-ts/{SERIALIZER_VERSION}+{spec.language}"
+        f"@{_pack_version()}/{_spec_digest(spec)}{plugin}"
+    )
 
 
-def _parse(spec: LanguageSpec, src: str):
-    return _parser(spec.language).parse(src.encode("utf-8"))
+def _parse(spec: LanguageSpec, src: str, strict: bool = True):
+    src, _ = preprocessed(spec.preprocessor, src)
+    tree = _parser(spec.language).parse(src.encode("utf-8"))
+    if strict and tree.root_node.has_error:
+        raise ParseError(
+            f"does not parse as {spec.language}. A templating layer the grammar "
+            "cannot read (dbt Jinja, ERB) will do this."
+        )
+    return tree
 
 
 # Separators a formatter adds or removes freely. Prettier writes a trailing
@@ -188,12 +334,20 @@ def _unwrap_parameter(node):
 def _normalise_leaf(node, spec: LanguageSpec) -> str | None:
     """Fold away spellings a formatter changes without changing meaning."""
     text = node.text.decode("utf-8", "replace")
+    if spec.fold_case and node.type.startswith(spec.fold_case):
+        return f"{node.type}:{text.lower()!r}"
     if spec.language in _JS_LIKE and node.type == "number":
         try:
             value = float(text.replace("_", ""))
         except ValueError:
             return f"number:{text}"
         return f"number:{value!r}"
+    # An anonymous leaf is a literal from the grammar, so its type is the only
+    # spelling that can produce it. Folding is a no-op where the grammar is
+    # case-sensitive and the whole point where it is not, as in BigQuery SQL,
+    # whose keywords are anonymous `SELECT` rather than a named keyword node.
+    if not node.is_named and text.isalpha():
+        return f"{node.type}:{text.lower()!r}"
     return f"{node.type}:{text!r}"
 
 
@@ -414,8 +568,13 @@ def hashes(src: str, target: Target) -> tuple[str, str]:
         for line, text in _comment_lines(_parse(spec, src).root_node, spec)
         if target.start <= line <= target.end and not marker_grammar.is_marker(text)
     ]
-    semantic = digest(rendered or "")
-    return semantic, digest((rendered or "") + "\n--comments--\n" + "\n".join(comments))
+    # Masked-out content is not an escape hatch: it is hashed verbatim. Taken
+    # from the target's own lines, not the file's, or a span anywhere in the
+    # file would trip every keystone in it.
+    extra = preprocessed(spec.preprocessor, canonical_source(src, target))[1]
+    body = (rendered or "") + ("\n--masked--\n" + extra if extra else "")
+    semantic = digest(body)
+    return semantic, digest(body + "\n--comments--\n" + "\n".join(comments))
 
 
 def canonical_source(src: str, target: Target) -> str:
@@ -431,33 +590,37 @@ def hash_stored_source(source: str, target: str) -> str:
         return fallback.hash_stored_source(source, target)
     path = target.split("::")[0]
     spec = spec_for(path)
+    extra = preprocessed(spec.preprocessor, source)[1]
+    suffix = "\n--masked--\n" + extra if extra else ""
     if "::" not in target:
-        root = _parse(spec, source).root_node
-        return digest(_render(root, spec.comments, spec) or "")
+        root = _parse(spec, source, strict=False).root_node
+        return digest((_render(root, spec.comments, spec) or "") + suffix)
 
     # The stored slice is the node's own text, so a method arrives indented
     # and without its class. Dedent it and take the first definition found at
     # any depth rather than matching the qualname, which has no context here.
     fragment = textwrap.dedent(source)
 
-    root = _parse(spec, fragment).root_node
+    root = _parse(spec, fragment, strict=False).root_node
     for _name, node in _definitions(root, spec):
         # Must render from the same node `hashes` does: the outermost wrapper.
-        return digest(_render(_outermost(node, spec), spec.comments, spec) or "")
+        return digest(
+            (_render(_outermost(node, spec), spec.comments, spec) or "") + suffix
+        )
 
     if spec.language in _JS_LIKE:
         # A method fragment does not parse as a method standing alone, so it
         # needs a class shell; the shell itself is a definition, hence the
         # prefix filter.
         shell = "__keystones__"
-        root = _parse(spec, f"class {shell} {{\n{fragment}\n}}").root_node
+        root = _parse(spec, f"class {shell} {{\n{fragment}\n}}", strict=False).root_node
         for name, node in _definitions(root, spec):
             if name.startswith(f"{shell}."):
-                return digest(_render(node, spec.comments, spec) or "")
+                return digest((_render(node, spec.comments, spec) or "") + suffix)
 
     for child in root.children:
         if child.is_named and child.type not in spec.comments:
-            return digest(_render(child, spec.comments, spec) or "")
+            return digest((_render(child, spec.comments, spec) or "") + suffix)
     raise ResolutionError(f"{target}: stored source contains no definition")
 
 
@@ -488,6 +651,12 @@ def available() -> bool:
 
 def hasher_id_for_path(path: str) -> str:
     return hasher_id_for(spec_for(path))
+
+
+def kind_for_path(path: str) -> str:
+    """The plugin's name when one is attached: that is what a reviewer needs."""
+    spec = spec_for(path)
+    return spec.preprocessor.name if spec.preprocessor else spec.language
 
 
 def duplicate_qualnames(path: str, src: str) -> set[str]:
