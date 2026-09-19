@@ -58,12 +58,16 @@ def _split(qualifiers: str | None) -> tuple[Scope, str, str | None]:
     happens to be called `text`.
     """
     parts = [q.strip() for q in (qualifiers or "").split(",") if q.strip()]
-    kinds = [q[len("hash=") :].strip() for q in parts if q.startswith("hash=")]
+    kinds, plain = [], []
+    for part in parts:
+        key, sep, value = part.partition("=")
+        (kinds if sep and key.strip() == "hash" else plain).append(
+            value.strip() if sep else part
+        )
     if len(kinds) > 1:
         raise MarkerError(f"more than one hash= qualifier: {', '.join(kinds)}")
     if kinds and not kinds[0]:
         raise MarkerError("hash= needs a value, such as hash=text")
-    plain = [q for q in parts if not q.startswith("hash=")]
     scope = Scope.FILE if "file" in plain else Scope.NODE
     category = next((q for q in plain if q != "file"), "default")
     return scope, category, (kinds[0] if kinds else None)

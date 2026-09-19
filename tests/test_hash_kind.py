@@ -255,3 +255,17 @@ def test_marker_and_sidecar_must_agree_on_the_kind(repo, run_cli, capsys):
     sidecar.write_text(sidecar.read_text().replace('hash = "sql"', 'hash = "text"'))
     assert run_cli("check", "--all", "--no-base") == 1
     assert "[C14]" in capsys.readouterr().err
+
+
+# --- the hash qualifier's spelling -------------------------------------------
+
+
+def test_hash_qualifier_tolerates_spaces_around_the_equals():
+    marker = mg.parse_point("-- keystone(finance, hash = text): x", "a.sql", 1)
+    assert marker.hash_kind == "text"
+    assert marker.category == "finance"
+
+
+def test_hash_qualifier_with_a_space_and_no_value_is_still_an_error():
+    with pytest.raises(mg.MarkerError):
+        mg.parse_point("-- keystone(hash = ): x", "a.sql", 1)
