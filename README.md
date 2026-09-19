@@ -260,6 +260,34 @@ extension is still refused, and `.py` cannot be reassigned at all.
 Changing the table re-gates every keystone under it, which is a real change and
 is reported as [C14] rather than passing quietly.
 
+### Templated files, via a plugin
+
+A grammar cannot read a templating layer. dbt models are the case: Jinja turns
+a model into ERROR nodes, and hashing an error-recovery tree is worse than
+refusing one. A preprocessor plugin masks the template so the residue parses:
+
+```toml
+[[tool.keystones.language]]
+builtin = "sql_bigquery"
+extensions = [".sql"]
+preprocessor = "keystones_dbt:preprocess"
+```
+
+The plugin is an ordinary `pip install`, and the dialect is yours to pick - the
+preprocessor never knows which SQL grammar it is feeding. The `hash` kind then
+names the plugin rather than the grammar, because a reviewer needs to know a
+plugin is in play; `hasher` carries both:
+
+```toml
+hash = "dbt"
+hasher = "keystones-ts/2+sql_bigquery@1.20.0/a1b2c3d4e5f6+dbt/1"
+```
+
+Masked content is hashed verbatim, so a template expression is not a hole in
+the gate, and a plugin may refuse a file it cannot handle safely rather than
+guess. A refusal is reported and points at `hash=text`; it never silently
+downgrades. See `keystones/preprocess.py` for the contract.
+
 ### Adding a language
 
 Any grammar `tree-sitter-language-pack` carries can be wired up from your own

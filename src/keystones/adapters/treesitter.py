@@ -19,6 +19,7 @@ from keystones.adapters import fallback
 from keystones.adapters.base import ResolutionError
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
+from keystones.preprocess import Refused
 
 SERIALIZER_VERSION = 2
 
@@ -51,6 +52,8 @@ class LanguageSpec:
     # Node-type prefixes whose text is case-insensitive. SQL keywords are the
     # case: sqlfluff rewrites `select` to `SELECT` without changing meaning.
     fold_case: tuple[str, ...] = ()
+    # A plugin that masks what this grammar cannot read. See keystones.preprocess.
+    preprocessor: object | None = None
 
 
 SPECS: tuple[LanguageSpec, ...] = (
@@ -151,9 +154,16 @@ def spec_from_config(language) -> LanguageSpec | None:
     """
     if language.builtin is not None:
         shipped = next(s for s in SPECS if s.language == language.builtin)
-        return dataclasses.replace(shipped, extensions=language.extensions)
+        return dataclasses.replace(
+            shipped,
+            extensions=language.extensions,
+            preprocessor=language.preprocessor,
+        )
     if language.grammar is None:
         return None
+    optional_pre = (
+        {"preprocessor": language.preprocessor} if language.preprocessor else {}
+    )
     optional = {
         field: getattr(language, field)
         for field in (
@@ -172,6 +182,7 @@ def spec_from_config(language) -> LanguageSpec | None:
         extensions=language.extensions,
         definitions=language.definitions,
         **optional,
+        **optional_pre,
     )
 
 
@@ -245,6 +256,7 @@ def _spec_digest(spec: LanguageSpec) -> str:
             ",".join(sorted(spec.wrappers)),
             ",".join(spec.label_children),
             ",".join(spec.fold_case),
+            spec.preprocessor.id if spec.preprocessor else "",
         )
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
@@ -257,13 +269,51 @@ def hasher_id_for(spec: LanguageSpec) -> str:
     edit to it surfaces as a hasher mismatch that `migrate` can prove across,
     rather than as drift in code nobody touched.
     """
+    # The plugin is in the digest already; naming it here is so a person can
+    # see it without decoding a hash, and so a plugin that breaks its own
+    # hashes can be recognised rather than appearing to change by magic.
+    plugin = f"+{spec.preprocessor.id}" if spec.preprocessor else ""
     return (
         f"keystones-ts/{SERIALIZER_VERSION}+{spec.language}"
-        f"@{_pack_version()}/{_spec_digest(spec)}"
+        f"@{_pack_version()}/{_spec_digest(spec)}{plugin}"
     )
 
 
+class ContractError(ResolutionError):
+    """A preprocessor broke the contract it is held to."""
+
+
+class PreprocessorRefused(ResolutionError):
+    """The plugin declined this file, which is a supported answer."""
+
+
+def preprocessed(spec: LanguageSpec, src: str) -> tuple[str, str]:
+    """Run the plugin, holding it to the line-preservation contract.
+
+    A plugin that shifts lines corrupts every target in the file, silently and
+    in a way that looks like the code moved. Counting lines is nearly free, so
+    this is checked rather than documented.
+    """
+    if spec.preprocessor is None:
+        return src, ""
+    try:
+        masked, extra = spec.preprocessor.fn(src)
+    except Refused as exc:
+        raise PreprocessorRefused(
+            f"{spec.preprocessor.path} refused this file: {exc}"
+        ) from exc
+    if masked.count("\n") != src.count("\n"):
+        raise ContractError(
+            f"preprocessor {spec.preprocessor.path} changed the line count of "
+            f"this file, from {src.count(chr(10)) + 1} lines to "
+            f"{masked.count(chr(10)) + 1}. Targets are line numbers, so a mask "
+            "has to be line-preserving."
+        )
+    return masked, extra
+
+
 def _parse(spec: LanguageSpec, src: str, strict: bool = True):
+    src, _ = preprocessed(spec, src)
     tree = _parser(spec.language).parse(src.encode("utf-8"))
     if strict and tree.root_node.has_error:
         raise ParseError(
@@ -542,8 +592,13 @@ def hashes(src: str, target: Target) -> tuple[str, str]:
         for line, text in _comment_lines(_parse(spec, src).root_node, spec)
         if target.start <= line <= target.end and not marker_grammar.is_marker(text)
     ]
-    semantic = digest(rendered or "")
-    return semantic, digest((rendered or "") + "\n--comments--\n" + "\n".join(comments))
+    # Masked-out content is not an escape hatch: it is hashed verbatim. Taken
+    # from the target's own lines, not the file's, or a span anywhere in the
+    # file would trip every keystone in it.
+    extra = preprocessed(spec, canonical_source(src, target))[1]
+    body = (rendered or "") + ("\n--masked--\n" + extra if extra else "")
+    semantic = digest(body)
+    return semantic, digest(body + "\n--comments--\n" + "\n".join(comments))
 
 
 def canonical_source(src: str, target: Target) -> str:
@@ -559,9 +614,11 @@ def hash_stored_source(source: str, target: str) -> str:
         return fallback.hash_stored_source(source, target)
     path = target.split("::")[0]
     spec = spec_for(path)
+    extra = preprocessed(spec, source)[1]
+    suffix = "\n--masked--\n" + extra if extra else ""
     if "::" not in target:
         root = _parse(spec, source, strict=False).root_node
-        return digest(_render(root, spec.comments, spec) or "")
+        return digest((_render(root, spec.comments, spec) or "") + suffix)
 
     # The stored slice is the node's own text, so a method arrives indented
     # and without its class. Dedent it and take the first definition found at
@@ -571,7 +628,9 @@ def hash_stored_source(source: str, target: str) -> str:
     root = _parse(spec, fragment, strict=False).root_node
     for _name, node in _definitions(root, spec):
         # Must render from the same node `hashes` does: the outermost wrapper.
-        return digest(_render(_outermost(node, spec), spec.comments, spec) or "")
+        return digest(
+            (_render(_outermost(node, spec), spec.comments, spec) or "") + suffix
+        )
 
     if spec.language in _JS_LIKE:
         # A method fragment does not parse as a method standing alone, so it
@@ -581,11 +640,11 @@ def hash_stored_source(source: str, target: str) -> str:
         root = _parse(spec, f"class {shell} {{\n{fragment}\n}}", strict=False).root_node
         for name, node in _definitions(root, spec):
             if name.startswith(f"{shell}."):
-                return digest(_render(node, spec.comments, spec) or "")
+                return digest((_render(node, spec.comments, spec) or "") + suffix)
 
     for child in root.children:
         if child.is_named and child.type not in spec.comments:
-            return digest(_render(child, spec.comments, spec) or "")
+            return digest((_render(child, spec.comments, spec) or "") + suffix)
     raise ResolutionError(f"{target}: stored source contains no definition")
 
 
@@ -619,7 +678,9 @@ def hasher_id_for_path(path: str) -> str:
 
 
 def kind_for_path(path: str) -> str:
-    return spec_for(path).language
+    """The plugin's name when one is attached: that is what a reviewer needs."""
+    spec = spec_for(path)
+    return spec.preprocessor.name if spec.preprocessor else spec.language
 
 
 def duplicate_qualnames(path: str, src: str) -> set[str]:

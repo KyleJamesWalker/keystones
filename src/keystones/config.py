@@ -22,8 +22,23 @@ LANGUAGE_KEYS = frozenset(
         "fold_case",
         "builtin",
         "hash",
+        "preprocessor",
     }
 )
+
+
+@dataclass(frozen=True)
+class Preprocessor:
+    """A resolved `package:attribute` plugin, with the identity it declares."""
+
+    name: str
+    version: str
+    fn: object
+    path: str
+
+    @property
+    def id(self) -> str:
+        return f"{self.name}/{self.version}"
 
 
 @dataclass(frozen=True)
@@ -42,6 +57,7 @@ class LanguageConfig:
     builtin: str | None = None
     # The basis markers in these files get when they do not name one.
     hash: str | None = None
+    preprocessor: Preprocessor | None = None
     comments: frozenset[str] | None = None
     name_fields: tuple[str, ...] | None = None
     wrappers: frozenset[str] | None = None
@@ -113,6 +129,44 @@ def _builtin_specs() -> dict[str, object]:
     return {spec.language: spec for spec in treesitter.SPECS}
 
 
+def _preprocessor(spec: str, where: str) -> Preprocessor:
+    from importlib import import_module
+
+    if spec.count(":") != 1 or not all(spec.split(":")):
+        raise ConfigError(
+            f"{where}: preprocessor '{spec}' must be written module:attribute"
+        )
+    module_name, attribute = spec.split(":")
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        raise ConfigError(
+            f"{where}: cannot import '{module_name}' for preprocessor '{spec}'. "
+            "Is the plugin installed in the environment keystones runs in?"
+        ) from exc
+    fn = getattr(module, attribute, None)
+    if fn is None:
+        raise ConfigError(f"{where}: '{module_name}' has no attribute '{attribute}'")
+    if not callable(fn):
+        raise ConfigError(f"{where}: preprocessor '{spec}' is not callable")
+    missing = [
+        const
+        for const in ("KEYSTONES_PREPROCESSOR_NAME", "KEYSTONES_PREPROCESSOR_VERSION")
+        if not getattr(module, const, None)
+    ]
+    if missing:
+        raise ConfigError(
+            f"{where}: '{module_name}' does not declare {', '.join(missing)}. "
+            "A preprocessor's name and version are part of the hash identity."
+        )
+    return Preprocessor(
+        name=str(module.KEYSTONES_PREPROCESSOR_NAME),
+        version=str(module.KEYSTONES_PREPROCESSOR_VERSION),
+        fn=fn,
+        path=spec,
+    )
+
+
 def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfig:
     where = f"[[tool.keystones.language]] #{index + 1}"
     unknown = sorted(set(table) - LANGUAGE_KEYS)
@@ -182,11 +236,23 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
                 "there is nothing to attach a keystone to"
             )
 
+    preprocessor = None
+    if "preprocessor" in table:
+        if named is None:
+            raise ConfigError(
+                f"{where}: a preprocessor needs a grammar or builtin to feed; it "
+                "masks text so a parser can read it."
+            )
+        if not isinstance(table["preprocessor"], str):
+            raise ConfigError(f"{where}: preprocessor must be a string")
+        preprocessor = _preprocessor(table["preprocessor"], where)
+
     default_hash = table.get("hash")
     if default_hash is not None:
         if not isinstance(default_hash, str):
             raise ConfigError(f"{where}: hash must be a string")
-        available = {"text"} | ({named} if named else set())
+        offered = preprocessor.name if preprocessor else named
+        available = {"text"} | ({offered} if offered else set())
         if default_hash not in available:
             raise ConfigError(
                 f"{where}: hash '{default_hash}' is not a basis this table "
@@ -211,6 +277,7 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
         definitions=frozenset(definitions) if definitions else None,
         builtin=builtin,
         hash=default_hash,
+        preprocessor=preprocessor,
         **optional,
     )
 

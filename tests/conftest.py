@@ -6,6 +6,8 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
+# Stand-in plugins live here, imported by the same path string a real one uses.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
 
 @pytest.fixture(autouse=True)
