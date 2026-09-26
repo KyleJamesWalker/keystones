@@ -68,6 +68,31 @@ keystones fix -m "switched to banker's rounding per policy review"
 sidecar diff contains the old and new source, so the owner reviews code rather
 than a hash.
 
+### Marking in the editor
+
+Write `keystone add` where the marker belongs and let the CLI ask for the rest:
+
+```python
+# keystone add
+def compute_payout(amount: Decimal) -> Decimal:
+```
+
+```
+$ keystones add
+billing/payout.py:4: new keystone on billing/payout.py::compute_payout
+  id: payout-rounding
+  category (default, finance) [default]: finance
+  why is it load-bearing: GAAP rounding, see the 2026 finance sign-off
+  review every, e.g. 180d (blank for none):
+  depends on, path.py::Symbol (blank for none):
+keystones: adopted 'payout-rounding' on billing/payout.py::compute_payout
+```
+
+The line becomes `# keystone(finance): payout-rounding`. Qualifiers written up
+front are kept and not asked for: `keystone(finance) add`,
+`keystone(file) add`, and `keystone:start add` for a region. Until it is filled
+in, `check` fails on it, so a pending marker cannot be merged looking protected.
+
 ### Dependencies and staleness
 
 A keystone can name same-repo symbols it depends on, so a change one call frame
