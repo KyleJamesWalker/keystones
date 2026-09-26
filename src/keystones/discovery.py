@@ -80,7 +80,30 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
 def collect(
     cfg: Config, paths: list[str] | None = None
 ) -> tuple[list[Resolved], list[Finding], set[str]]:
+    resolved, pending, findings, skipped = scan(cfg, paths)
+    findings += [
+        Finding(
+            "pending",
+            Severity.ERROR,
+            f"a keystone on {item.target} is waiting for its details; "
+            "run `keystones add`",
+            item.marker.path,
+            item.marker.lineno,
+        )
+        for item in pending
+    ]
+    return resolved, findings, skipped
+
+
+def scan(
+    cfg: Config, paths: list[str] | None = None
+) -> tuple[list[Resolved], list[Resolved], list[Finding], set[str]]:
+    """Like `collect`, with `keystone add` markers returned apart as pending.
+
+    A pending item's marker id is a placeholder that exists only in memory.
+    """
     resolved: list[Resolved] = []
+    pending: list[Resolved] = []
     findings: list[Finding] = []
     skipped: set[str] = set()
     for rel in source_files(cfg, paths):
@@ -102,6 +125,7 @@ def collect(
         src = _readable(cfg.repo_root / rel)
         if src is None:
             continue
+        src, probes = marker_grammar.probe_pending(src)
         readable, why = True, ""
         try:
             found = preferred.markers(rel, src)
@@ -145,8 +169,10 @@ def collect(
                     Finding("resolve", Severity.ERROR, str(exc), rel, marker.lineno)
                 )
                 continue
-            resolved.append(Resolved(marker, target, adapter))
-    return resolved, findings, skipped
+            (pending if marker.id in probes else resolved).append(
+                Resolved(marker, target, adapter)
+            )
+    return resolved, pending, findings, skipped
 
 
 def _adapter_for(rel: str, marker: Marker, preferred, readable: bool, why: str = ""):

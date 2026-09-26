@@ -6,6 +6,7 @@ YAML, and an adapter only has to say where comments are.
 
 from __future__ import annotations
 
+import io
 import re
 
 from keystones.models import Marker, Scope
@@ -24,6 +25,11 @@ START_RE = re.compile(
     rf"{_OPENER}\s*keystone:start{_QUALIFIERS}\s*:\s*{_ID}\s*(?:\*/|-->)?\s*$"
 )
 END_RE = re.compile(rf"{_OPENER}\s*keystone:end\s*(?:\*/|-->)?\s*$")
+PENDING_RE = re.compile(
+    rf"(?P<head>{_OPENER}\s*keystone(?::start)?){_QUALIFIERS}\s+add"
+    r"(?P<tail>\s*(?:\*/|-->)?\s*)$"
+)
+_PROBE = "keystones-pending-{}"
 
 ANY = "keystone"
 
@@ -98,6 +104,60 @@ def is_region_end(text: str) -> bool:
 
 def is_ignored(src: str) -> bool:
     return IGNORE_RE.search(src) is not None
+
+
+def pending_category(line: str) -> str | None:
+    """The category a `keystone(...) add` line already names, if any."""
+    match = PENDING_RE.search(line)
+    if match is None:
+        return None
+    plain = [
+        q.strip()
+        for q in (match.group("qualifiers") or "").split(",")
+        if q.strip() and "=" not in q and q.strip() != "file"
+    ]
+    return plain[0] if plain else None
+
+
+def complete_pending(line: str, marker_id: str, category: str | None = None) -> str:
+    """Rewrite a `keystone add` line into a marker for `marker_id`.
+
+    `category` is added to the qualifiers unless the line already names one.
+    """
+    match = PENDING_RE.search(line)
+    if match is None:
+        raise MarkerError(f"not a pending marker: {line.strip()}")
+    quals = [q.strip() for q in (match.group("qualifiers") or "").split(",")]
+    quals = [q for q in quals if q]
+    if category and category != "default" and pending_category(line) is None:
+        quals.insert(quals.index("file") + 1 if "file" in quals else 0, category)
+    keyword = match.group("head") + (f"({', '.join(quals)})" if quals else "")
+    return f"{line[: match.start()]}{keyword}: {marker_id}{match.group('tail')}"
+
+
+def split_lines(text: str) -> list[str]:
+    """Lines as a lexer numbers them; `str.splitlines` also breaks on a form feed."""
+    return io.StringIO(text, newline="").readlines()
+
+
+def probe_pending(src: str) -> tuple[str, dict[str, int]]:
+    """Stand a throwaway id in for every `keystone add` line.
+
+    The adapter's own lexer then decides which of them are real comments, so a
+    pending marker inside a string literal is not one.
+    """
+    if "add" not in src or is_ignored(src):
+        return src, {}
+    lines = split_lines(src)
+    probes: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        if PENDING_RE.search(body) is None:
+            continue
+        probe = _PROBE.format(index + 1)
+        probes[probe] = index + 1
+        lines[index] = complete_pending(body, probe) + line[len(body) :]
+    return ("".join(lines), probes) if probes else (src, {})
 
 
 def scan_lines(
