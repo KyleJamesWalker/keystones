@@ -126,6 +126,9 @@ def resolve(src: str, marker: Marker) -> Target:
         for qualname, node in defs:
             if _start_line(node) == following:
                 return Target(marker.path, qualname, following, node.end_lineno)
+        for name, node in _module_assignments(tree):
+            if node.lineno == following and _constant(tree, name, marker.path):
+                return Target(marker.path, name, following, node.end_lineno)
 
     enclosing = [
         (qualname, node)
@@ -149,6 +152,9 @@ def _node_for(src: str, target: Target) -> ast.AST:
     for qualname, node in _definitions(tree):
         if qualname == target.qualname:
             return node
+    constant = _constant(tree, target.qualname, target.path)
+    if constant is not None:
+        return constant
     raise ResolutionError(f"{target}: no longer present in {target.path}")
 
 
@@ -193,31 +199,66 @@ def hash_stored_source(source: str, target: str) -> str:
 
 
 def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
-    for name, node in _definitions(ast.parse(src)):
+    tree = ast.parse(src)
+    for name, node in _definitions(tree):
         if name == qualname:
             return Target(path, name, _start_line(node), node.end_lineno)
+    constant = _constant(tree, qualname, path)
+    if constant is not None:
+        return Target(path, qualname, constant.lineno, constant.end_lineno)
     return None
 
 
-def _module_assignments(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+def _assignments(body: list[ast.stmt], prefix: str = "") -> list[tuple[str, ast.AST]]:
     out: list[tuple[str, ast.AST]] = []
-    for node in tree.body:
+    for node in body:
         if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    out.append((target.id, node))
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            out.append((node.target.id, node))
+            names = [node.target.id]
+        else:
+            continue
+        out += [(f"{prefix}{name}", node) for name in names]
     return out
 
 
+def _module_assignments(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    return _assignments(tree.body)
+
+
+def _class_attributes(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    return [
+        pair
+        for qualname, node in _definitions(tree)
+        if isinstance(node, ast.ClassDef)
+        for pair in _assignments(node.body, f"{qualname}.")
+    ]
+
+
+def _constant(tree: ast.Module, name: str, path: str) -> ast.AST | None:
+    """The one module-level binding of `name`, which a node keystone may cover.
+
+    A second binding would let a hash-identical decoy sit under the marker while
+    the one that wins at runtime is rewritten, the hazard C6 guards for defs.
+    """
+    bound = [
+        node for bound_name, node in _module_assignments(tree) if bound_name == name
+    ]
+    if len(bound) > 1:
+        raise ResolutionError(
+            f"{path}: {name} is assigned more than once at module level, so a "
+            "keystone on it cannot say which binding it protects"
+        )
+    return bound[0] if bound else None
+
+
 def render_symbol(src: str, symbol: str) -> str | None:
-    """Canonical text for a `depends` target: a definition or a module constant."""
+    """Canonical text for a `depends` target: a definition, constant or attribute."""
     tree = ast.parse(src)
     for qualname, node in _definitions(tree):
         if qualname == symbol:
             return render(node)
-    for name, node in _module_assignments(tree):
+    for name, node in [*_module_assignments(tree), *_class_attributes(tree)]:
         if name == symbol:
             return render(node)
     return None

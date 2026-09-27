@@ -116,6 +116,10 @@ keystones add billing/payout.py::compute_payout --id payout-rounding \
     --depends billing/helpers.py::quantize
 ```
 
+In Python a dependency may be a definition, a module constant (`::BASE_RATE`)
+or a class attribute (`::Fees.SURCHARGE`). A module constant bound once can
+also carry a keystone of its own: `keystones add billing/helpers.py::BASE_RATE`.
+
 `review_every = "180d"` sets a staleness budget. There is deliberately no
 `reviewed` field: a stored date would be whatever `fix` last wrote, so the age
 comes from `git log` on the sidecar itself. Going stale warns and shows up in
@@ -239,7 +243,7 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 
 | Language | Granularity | Reformat-immune |
 |---|---|---|
-| Python | function, method, class, test, region, file | yes, stdlib `ast` |
+| Python | function, method, class, test, module constant, region, file | yes, stdlib `ast` |
 | TypeScript, TSX, JavaScript | function, method, class, interface, type alias, region, file | yes, tree-sitter |
 | Go | func, method, type, const, region, file | yes, tree-sitter |
 | Terraform, HCL | block, region, file | yes, tree-sitter |
