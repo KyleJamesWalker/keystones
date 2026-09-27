@@ -1,7 +1,7 @@
-# keystones
+# Keystones: Code Review Gates for the Lines That Matter
 
-Force SME review of load-bearing code by pinning a review gate to an AST node
-instead of a file path.
+Require SME reviews for load-bearing code by pinning a review gate to an AST
+node instead of a file path.
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=QAEkJ54h36Y">
@@ -12,13 +12,13 @@ instead of a file path.
 </p>
 
 Mark a function with a one-line comment. A CODEOWNERS-guarded sidecar file
-records its canonical hash, its source and the reason it matters. Change the
-function and the hash stops matching, so the only way to get a green build is to
-edit the sidecar, which puts its owner on the pull request.
+records its canonical hash, source, and the reason it matters. Change the
+function and the hash stops matching, the only way to get your passing required
+checks is to update the sidecar, which puts its owner on the pull request.
 
 CODEOWNERS can only say "someone owns this file", which means protecting one
 20-line function also drags its owner into every typo fix in the other 800
-lines. That is why those rules get deleted. A keystone protects the function.
+lines. That is why those rules get deleted. A keystone protects a key function.
 
 ## Install
 
