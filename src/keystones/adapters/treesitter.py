@@ -76,6 +76,7 @@ SPECS: tuple[LanguageSpec, ...] = (
                 "type_alias_declaration",
                 "variable_declarator",
                 "abstract_class_declaration",
+                "public_field_definition",
             }
         ),
         wrappers=frozenset(
@@ -93,6 +94,7 @@ SPECS: tuple[LanguageSpec, ...] = (
                 "interface_declaration",
                 "type_alias_declaration",
                 "variable_declarator",
+                "public_field_definition",
             }
         ),
         wrappers=frozenset({"export_statement", "lexical_declaration"}),
@@ -107,8 +109,11 @@ SPECS: tuple[LanguageSpec, ...] = (
                 "class_declaration",
                 "method_definition",
                 "variable_declarator",
+                "field_definition",
             }
         ),
+        # A class field names itself in `property`, not `name`.
+        name_fields=("name", "property"),
         wrappers=frozenset({"export_statement", "lexical_declaration"}),
     ),
     LanguageSpec(
@@ -618,6 +623,9 @@ def hash_stored_source(source: str, target: str) -> str:
         if not shelled.has_error:
             root = shelled
     for _name, node in _definitions(root, spec):
+        if spec.language in _JS_LIKE and _start_line(node, spec) != 1:
+            # A class field alone reads as an assignment; this is a local in it.
+            break
         # Must render from the same node `hashes` does: the outermost wrapper.
         return digest(
             (_render(_outermost(node, spec), spec.comments, spec) or "") + suffix

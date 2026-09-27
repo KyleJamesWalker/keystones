@@ -440,3 +440,46 @@ def test_a_destructuring_qualname_survives_reformatting(pattern):
     spec = ts.spec_for("checkout.jsx")
     names = [name for name, _ in ts._definitions(ts._parse(spec, src).root_node, spec)]
     assert "Cart.{first,last}" in names
+
+
+STORE = """export class Store {
+  // keystone: handle
+  handle = () => {
+    const inside = 2;
+    return inside;
+  };
+  static count = 0;
+  #secret = 1;
+  method() {
+    const local = 3;
+  }
+}
+"""
+
+
+@pytest.mark.parametrize("path", ["store.js", "store.ts", "store.tsx"])
+def test_a_class_field_is_a_definition(path):
+    spec = ts.spec_for(path)
+    names = [
+        name for name, _ in ts._definitions(ts._parse(spec, STORE).root_node, spec)
+    ]
+    assert names == [
+        "Store",
+        "Store.handle",
+        "Store.handle.inside",
+        "Store.count",
+        "Store.#secret",
+        "Store.method",
+        "Store.method.local",
+    ]
+    assert ts.resolve(STORE, only(path, STORE)).qualname == "Store.handle"
+
+
+@pytest.mark.parametrize("path", ["store.js", "store.ts", "store.tsx"])
+def test_a_class_field_keystone_end_to_end(repo, run_cli, capsys, path):
+    (repo / path).write_text(STORE.replace("  // keystone: handle\n", ""))
+    assert run_cli("add", f"{path}::Store.handle", "--id", "handle", "-m", "Why.") == 0
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+    (repo / path).write_text((repo / path).read_text().replace("= 2", "= 3"))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'handle' changed" in capsys.readouterr().err
