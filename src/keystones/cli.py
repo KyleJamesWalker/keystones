@@ -486,6 +486,21 @@ def cmd_add(args, cfg: Config) -> int:
         if qualname
         else adapter.resolve(new_src, Marker(args.id, args.category, scope, rel, 1))
     )
+    if qualname:
+        marker = Marker(args.id, args.category, scope, rel, insert_at)
+        try:
+            lands_on = adapter.resolve(new_src, marker).qualname
+        except ResolutionError:
+            lands_on = None
+        if lands_on != qualname:
+            path.write_text(src)
+            print(
+                f"keystones: a marker above {qualname} would attach to "
+                f"{lands_on or 'nothing'}, which shares its first line. Move "
+                f"{qualname} onto its own line first.",
+                file=sys.stderr,
+            )
+            return 1
     try:
         semantic, text = adapter.hashes(new_src, new_target)
     except ResolutionError as exc:
