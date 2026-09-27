@@ -139,17 +139,22 @@ def _paged(path: str, token: str) -> tuple[int, list]:
         page += 1
 
 
-def _ruleset_label(owner: str, repo: str, rule: dict, token: str, names: dict) -> str:
+def _ruleset_label(
+    owner: str, repo: str, rule: dict, token: str, rulesets: dict
+) -> str:
+    """Also caches the ruleset itself in `rulesets`, None where it cannot be read."""
     ruleset_id = rule.get("ruleset_id")
-    if ruleset_id not in names:
+    if ruleset_id not in rulesets:
         status, body = _get(f"/repos/{owner}/{repo}/rulesets/{ruleset_id}", token)
-        names[ruleset_id] = body.get("name") if status == 200 else None
+        rulesets[ruleset_id] = (
+            body if status == 200 and isinstance(body, dict) else None
+        )
     where = " ".join(
         str(part)
         for part in (rule.get("ruleset_source_type"), rule.get("ruleset_source"))
         if part
     ).lower()
-    name = names[ruleset_id]
+    name = (rulesets[ruleset_id] or {}).get("name")
     label = f"ruleset '{name}'" if name else f"ruleset {ruleset_id}"
     return f"{label} ({where})" if where else label
 
@@ -189,11 +194,11 @@ def required_reviewers(repo_root: Path) -> list[RequiredReviewers]:
     status, rules = _paged(f"/repos/{owner}/{repo}/rules/branches/{branch}", token)
     if status != 200:
         raise Unavailable(f"cannot read the rules for '{branch}': HTTP {status}")
-    names: dict = {}
+    rulesets: dict = {}
     out = []
     for rule in rules:
         if isinstance(rule, dict) and rule.get("type") == "pull_request":
-            label = _ruleset_label(owner, repo, rule, token, names)
+            label = _ruleset_label(owner, repo, rule, token, rulesets)
             out += _reviewers_in(rule.get("parameters") or {}, label)
     return out
 
@@ -253,9 +258,9 @@ def audit(repo_root: Path, required_check: str = "keystones") -> Report:
     if rules_status == 401:
         findings.append(_rejected(rules_status))
         return report
-    names: dict = {}
+    rulesets: dict = {}
     rules = [
-        (rule, _ruleset_label(owner, repo, rule, token, names))
+        (rule, _ruleset_label(owner, repo, rule, token, rulesets))
         for rule in rules
         if isinstance(rule, dict)
         and rule.get("type") in ("pull_request", "required_status_checks")
@@ -360,6 +365,34 @@ def audit(repo_root: Path, required_check: str = "keystones") -> Report:
                 "for them rather than by configuration",
             )
         )
+
+    relied_on = set(satisfied.values())
+    for rule, label in rules:
+        ruleset = rulesets.get(rule.get("ruleset_id"))
+        if label not in relied_on:
+            continue
+        relied_on.discard(label)
+        # Returned only to a token with write access to the ruleset.
+        if ruleset is None or "bypass_actors" not in ruleset:
+            findings.append(
+                Finding(
+                    "doctor",
+                    Severity.WARNING,
+                    f"{label}: this token cannot read who may bypass it, which "
+                    "needs write access to the ruleset, so the gate may hold by "
+                    "convention for someone",
+                )
+            )
+        elif ruleset["bypass_actors"]:
+            findings.append(
+                Finding(
+                    "doctor",
+                    Severity.WARNING,
+                    f"{label} lets {len(ruleset['bypass_actors'])} actor(s) bypass "
+                    "it, so the gate holds by convention for them rather than by "
+                    "configuration",
+                )
+            )
 
     if CHECK not in satisfied:
         findings.append(

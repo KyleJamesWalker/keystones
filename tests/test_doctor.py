@@ -246,3 +246,45 @@ def test_the_cli_names_the_source_of_each_requirement(repo, run_cli, api, capsys
     assert run_cli("doctor") == 0
     out = capsys.readouterr().out
     assert "code owner review: ruleset 'protect-main' (organization acme)" in out
+
+
+def warnings(findings):
+    return [f.message for f in findings if f.severity is Severity.WARNING]
+
+
+def test_a_ruleset_nobody_can_bypass_says_nothing(tmp_path, api):
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {7: {"name": "protect-main", "bypass_actors": []}}
+    assert warnings(doctor.run(tmp_path)) == []
+
+
+def test_a_ruleset_with_bypass_actors_warns(tmp_path, api):
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {
+        7: {
+            "name": "protect-main",
+            "bypass_actors": [{"actor_type": "OrganizationAdmin"}],
+        }
+    }
+    findings = doctor.run(tmp_path)
+    assert errors(findings) == []
+    assert warnings(findings) == [
+        "ruleset 'protect-main' (organization acme) lets 1 actor(s) bypass it, so "
+        "the gate holds by convention for them rather than by configuration"
+    ]
+
+
+@pytest.mark.parametrize(
+    "rulesets", [{7: {"name": "protect-main"}}, {}], ids=["hidden", "unreadable"]
+)
+def test_a_bypass_list_the_token_cannot_see_warns(tmp_path, api, rulesets):
+    """GitHub returns bypass_actors only to a token with write access."""
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = rulesets
+    findings = doctor.run(tmp_path)
+    assert errors(findings) == []
+    (message,) = warnings(findings)
+    assert "cannot read who may bypass it" in message
