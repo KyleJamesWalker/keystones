@@ -61,6 +61,9 @@ version-file = "src/keystones/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/keystones"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["docs/*.webp"]
+
 # Pins the public index so the ambient UV_INDEX_URL / PIP_INDEX_URL cannot reach
 # a lockfile. Removing this leaks an internal mirror host into uv.lock.
 [[tool.uv.index]]
