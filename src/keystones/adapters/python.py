@@ -126,7 +126,7 @@ def resolve(src: str, marker: Marker) -> Target:
         for qualname, node in defs:
             if _start_line(node) == following:
                 return Target(marker.path, qualname, following, node.end_lineno)
-        for name, node in _module_assignments(tree):
+        for name, node in _bindings(tree):
             if node.lineno == following and _constant(tree, name, marker.path):
                 return Target(marker.path, name, following, node.end_lineno)
 
@@ -235,18 +235,21 @@ def _class_attributes(tree: ast.Module) -> list[tuple[str, ast.AST]]:
     ]
 
 
+def _bindings(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    """Module constants and class attributes, as `NAME` and `Class.ATTR`."""
+    return [*_module_assignments(tree), *_class_attributes(tree)]
+
+
 def _constant(tree: ast.Module, name: str, path: str) -> ast.AST | None:
-    """The one module-level binding of `name`, which a node keystone may cover.
+    """The one binding of `name`, which a node keystone may cover.
 
     A second binding would let a hash-identical decoy sit under the marker while
     the one that wins at runtime is rewritten, the hazard C6 guards for defs.
     """
-    bound = [
-        node for bound_name, node in _module_assignments(tree) if bound_name == name
-    ]
+    bound = [node for bound_name, node in _bindings(tree) if bound_name == name]
     if len(bound) > 1:
         raise ResolutionError(
-            f"{path}: {name} is assigned more than once at module level, so a "
+            f"{path}: {name} is assigned more than once in the same scope, so a "
             "keystone on it cannot say which binding it protects"
         )
     return bound[0] if bound else None
@@ -258,7 +261,7 @@ def render_symbol(src: str, symbol: str) -> str | None:
     for qualname, node in _definitions(tree):
         if qualname == symbol:
             return render(node)
-    for name, node in [*_module_assignments(tree), *_class_attributes(tree)]:
+    for name, node in _bindings(tree):
         if name == symbol:
             return render(node)
     return None

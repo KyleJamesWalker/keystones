@@ -154,12 +154,44 @@ def test_a_constant_bound_twice_refuses_a_keystone():
         adapter.resolve(src, one_marker(src))
 
 
-def test_a_marker_in_a_class_body_still_covers_the_class():
-    """Resolving it to the attribute would silently move existing keystones."""
+def test_a_class_attribute_takes_a_node_marker():
     src = RATES.replace(
         "    SURCHARGE: float = 0.5", "    # keystone: fees\n    SURCHARGE: float = 0.5"
     )
-    assert adapter.resolve(src, one_marker(src)).qualname == "Fees"
+    target = adapter.resolve(src, one_marker(src))
+    assert (target.qualname, target.start, target.end) == ("Fees.SURCHARGE", 6, 6)
+
+
+def test_a_nested_class_attribute_takes_a_node_marker():
+    src = RATES.replace(
+        "        FLAT = 1", "        # keystone: flat\n        FLAT = 1"
+    )
+    assert adapter.resolve(src, one_marker(src)).qualname == "Fees.Card.FLAT"
+
+
+def test_a_class_attribute_bound_twice_refuses_a_keystone():
+    src = "class Fees:\n    # keystone: rate\n    RATE = 1\n    RATE = 2\n"
+    with pytest.raises(ResolutionError, match="assigned more than once"):
+        adapter.resolve(src, one_marker(src))
+
+
+def test_the_same_attribute_name_in_two_classes_is_not_a_rebinding():
+    src = "class A:\n    # keystone: rate\n    RATE = 1\n\n\nclass B:\n    RATE = 2\n"
+    assert adapter.resolve(src, one_marker(src)).qualname == "A.RATE"
+
+
+def test_a_class_attribute_keystone_end_to_end(repo, run_cli, capsys):
+    (repo / "rates.py").write_text(RATES)
+    assert (
+        run_cli("add", "rates.py::Fees.SURCHARGE", "--id", "surcharge", "-m", "Why.")
+        == 0
+    )
+    assert "    # keystone: surcharge\n    SURCHARGE" in (repo / "rates.py").read_text()
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+    path = repo / "rates.py"
+    path.write_text(path.read_text().replace("0.5", "0.6"))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'surcharge' changed" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
