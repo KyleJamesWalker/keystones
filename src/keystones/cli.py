@@ -14,7 +14,7 @@ from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
 from keystones.checks import run_all
 from keystones.config import Config, ConfigError, load
-from keystones.discovery import collect
+from keystones.discovery import collect, scan
 from keystones.models import Entry, Marker, Scope, Severity
 
 
@@ -83,7 +83,7 @@ def cmd_check(args, cfg: Config) -> int:
 
 
 def cmd_fix(args, cfg: Config) -> int:
-    resolved, findings, _ = collect(cfg, None)
+    resolved, _, findings, _ = scan(cfg, None)
     if findings:
         _report(findings, "plain")
         return 1
@@ -216,7 +216,7 @@ def _adopt(args, cfg: Config) -> int:
     This is the path C1 points at, and the only one that works for a region,
     whose boundaries are already in the file.
     """
-    resolved, findings, _ = collect(cfg, None)
+    resolved, _, findings, _ = scan(cfg, None)
     if findings:
         _report(findings, "plain")
         return 1
@@ -280,6 +280,115 @@ def _adopt(args, cfg: Config) -> int:
     return 0
 
 
+def _ask(label: str, check, default: str = "") -> str:
+    """Prompt until `check`, which returns a problem or None, accepts the answer."""
+    suffix = f" [{default}]" if default else ""
+    while True:
+        answer = input(f"  {label}{suffix}: ").strip() or default
+        problem = check(answer)
+        if problem is None:
+            return answer
+        print(f"  {problem}", file=sys.stderr)
+
+
+def _complete_pending(args, cfg: Config) -> int:
+    """Ask for the details of each `keystone add` marker, then adopt it."""
+    from keystones.staleness import DurationError, parse_duration
+
+    resolved, pending, findings, _ = scan(cfg, None)
+    if findings:
+        _report(findings, "plain")
+        return 1
+    if not pending:
+        print(
+            "keystones: no `keystone add` markers in the tree. Write one above "
+            "the code to protect, or pass a target.",
+            file=sys.stderr,
+        )
+        return 1
+
+    taken = {item.marker.id for item in resolved} | {e.id for e in _entries(cfg)}
+
+    def check_id(value: str) -> str | None:
+        if not marker_grammar.ID_RE.match(value):
+            return "use letters, digits, dot, dash or underscore"
+        return f"'{value}' is already a keystone" if value in taken else None
+
+    def check_category(value: str) -> str | None:
+        return None if value in cfg.categories else f"unknown category '{value}'"
+
+    def check_reason(value: str) -> str | None:
+        return None if value else "a keystone needs a reason"
+
+    def check_duration(value: str) -> str | None:
+        try:
+            if value:
+                parse_duration(value)
+        except DurationError as exc:
+            return str(exc)
+        return None
+
+    def check_depends(value: str) -> str | None:
+        try:
+            dependencies.combined_hash(cfg.repo_root, value.replace(",", " ").split())
+        except dependencies.UnresolvedDependency as exc:
+            return str(exc)
+        return None
+
+    for item in sorted(pending, key=lambda i: (i.marker.path, i.marker.lineno)):
+        path = cfg.repo_root / item.marker.path
+        original = path.read_bytes()
+        lines = marker_grammar.split_lines(original.decode("utf-8"))
+        line = lines[item.marker.lineno - 1]
+        body = line.rstrip("\r\n")
+        named = marker_grammar.pending_category(body)
+        where = f"{item.marker.path}:{item.marker.lineno}"
+        if named is not None and check_category(named):
+            print(f"keystones: {where}: {check_category(named)}", file=sys.stderr)
+            return 1
+        print(f"{where}: new keystone on {item.target}")
+        try:
+            marker_id = _ask("id", check_id)
+            category = named or (
+                _ask(
+                    f"category ({', '.join(cfg.categories)})", check_category, "default"
+                )
+                if len(cfg.categories) > 1
+                else "default"
+            )
+            message = _ask("why is it load-bearing", check_reason)
+            review_every = _ask(
+                "review every, e.g. 180d (blank for none)", check_duration
+            )
+            depends = _ask(
+                "depends on, path.py::Symbol (blank for none)", check_depends
+            )
+        except (EOFError, KeyboardInterrupt):
+            print("\nkeystones: cancelled", file=sys.stderr)
+            return 1
+
+        lines[item.marker.lineno - 1] = (
+            marker_grammar.complete_pending(body, marker_id, category)
+            + line[len(body) :]
+        )
+        path.write_bytes("".join(lines).encode("utf-8"))
+        status = _adopt(
+            argparse.Namespace(
+                id=marker_id,
+                message=message,
+                review_every=review_every or None,
+                depends=depends.replace(",", " ").split(),
+            ),
+            cfg,
+        )
+        if status != 0:
+            # Leave no marker behind without a sidecar to go with it.
+            path.write_bytes(original)
+            return status
+        taken.add(marker_id)
+    return 0
+
+
 def _file_scope_insert_line(src: str) -> int:
     """First line a comment may go on without breaking the file.
 
@@ -297,6 +406,11 @@ def _file_scope_insert_line(src: str) -> int:
 
 
 def cmd_add(args, cfg: Config) -> int:
+    if args.target is None and args.id is None:
+        return _complete_pending(args, cfg)
+    if args.id is None or args.message is None:
+        print("keystones: add needs --id and -m", file=sys.stderr)
+        return 2
     if args.target is None:
         return _adopt(args, cfg)
     if "::" in args.target:
@@ -544,10 +658,11 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help=(
             "path/to/file.py::QualName, or path/to/file.py for file scope. "
-            "Omit it to adopt a marker already written into the source."
+            "Omit it to adopt a marker already written into the source, or omit "
+            "it and --id to fill in every `keystone add` marker interactively."
         ),
     )
-    add.add_argument("--id", required=True)
+    add.add_argument("--id")
     add.add_argument("--category", default="default")
     add.add_argument(
         "--hash",
@@ -555,7 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="basis to gate on: 'text', or a grammar name. Auto when the file "
         "has exactly one readable basis.",
     )
-    add.add_argument("-m", "--message", required=True, help="why this is load-bearing")
+    add.add_argument("-m", "--message", help="why this is load-bearing")
     add.add_argument("--review-every", help="staleness budget, e.g. 180d")
     add.add_argument(
         "--depends",

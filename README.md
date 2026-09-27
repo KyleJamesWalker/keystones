@@ -1,16 +1,24 @@
-# keystones
+# Keystones: Code Review Gates for the Lines That Matter
 
-Force SME review of load-bearing code by pinning a review gate to an AST node
-instead of a file path.
+Require SME reviews for load-bearing code by pinning a review gate to an AST
+node instead of a file path.
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=QAEkJ54h36Y">
+    <img src="https://raw.githubusercontent.com/KyleJamesWalker/keystones/main/docs/keystones-explainer.webp" width="320" alt="Keystones explainer video">
+  </a>
+  <br>
+  <a href="https://www.youtube.com/watch?v=QAEkJ54h36Y">▶ Watch the explainer</a>
+</p>
 
 Mark a function with a one-line comment. A CODEOWNERS-guarded sidecar file
-records its canonical hash, its source and the reason it matters. Change the
-function and the hash stops matching, so the only way to get a green build is to
-edit the sidecar, which puts its owner on the pull request.
+records its canonical hash, source, and the reason it matters. Change the
+function and the hash stops matching, the only way to get your passing required
+checks is to update the sidecar, which puts its owner on the pull request.
 
 CODEOWNERS can only say "someone owns this file", which means protecting one
 20-line function also drags its owner into every typo fix in the other 800
-lines. That is why those rules get deleted. A keystone protects the function.
+lines. That is why those rules get deleted. A keystone protects a key function.
 
 ## Install
 
@@ -67,6 +75,31 @@ keystones fix -m "switched to banker's rounding per policy review"
 `fix` refuses to run without `-m` when the change is semantic. The resulting
 sidecar diff contains the old and new source, so the owner reviews code rather
 than a hash.
+
+### Marking in the editor
+
+Write `keystone add` where the marker belongs and let the CLI ask for the rest:
+
+```python
+# keystone add
+def compute_payout(amount: Decimal) -> Decimal:
+```
+
+```
+$ keystones add
+billing/payout.py:4: new keystone on billing/payout.py::compute_payout
+  id: payout-rounding
+  category (default, finance) [default]: finance
+  why is it load-bearing: GAAP rounding, see the 2026 finance sign-off
+  review every, e.g. 180d (blank for none):
+  depends on, path.py::Symbol (blank for none):
+keystones: adopted 'payout-rounding' on billing/payout.py::compute_payout
+```
+
+The line becomes `# keystone(finance): payout-rounding`. Qualifiers written up
+front are kept and not asked for: `keystone(finance) add`,
+`keystone(file) add`, and `keystone:start add` for a region. Until it is filled
+in, `check` fails on it, so a pending marker cannot be merged looking protected.
 
 ### Dependencies and staleness
 
