@@ -36,7 +36,7 @@ repos:
         name: keystones (staged)
         entry: uv run keystones check --warn-only
         language: system
-        types: [python]
+        types: [text]
         # Local feedback only. CI runs the whole-repo hook below instead.
         stages: [pre-commit]
         verbose: true

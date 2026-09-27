@@ -15,7 +15,7 @@ from keystones.adapters.base import ResolutionError
 from keystones.checks import run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect, scan
-from keystones.models import Entry, Marker, Scope, Severity
+from keystones.models import Entry, Finding, Marker, Scope, Severity
 
 
 def _git_author(repo_root: Path) -> str:
@@ -53,11 +53,69 @@ def _entries(cfg: Config) -> list[Entry]:
     return sidecar.load_all(cfg.sidecar_root, cfg.categories)
 
 
+def _staged_entries(
+    cfg: Config, paths: list[str]
+) -> tuple[dict[tuple[str, str], Entry], list[Finding]]:
+    """The sidecars among `paths`, parsed, so each is checked with its marker."""
+    entries: dict[tuple[str, str], Entry] = {}
+    findings: list[Finding] = []
+    prefix = f"{cfg.root.strip('/')}/"
+    for rel in paths:
+        if not rel.startswith(prefix) or not rel.endswith(".md"):
+            continue
+        parts = rel[len(prefix) :].split("/")
+        full = cfg.repo_root / rel
+        if len(parts) != 2 or parts[0] not in cfg.categories or not full.is_file():
+            continue
+        try:
+            entry = sidecar.parse(full, parts[0])
+        except (sidecar.SidecarError, ValueError) as exc:
+            findings.append(Finding("sidecar", Severity.ERROR, str(exc), rel))
+            continue
+        entries[entry.key] = entry
+    return entries, findings
+
+
+def _check_paths(args, cfg: Config, paths: list[str]) -> int:
+    """The staged hook: cost follows the files passed, not the size of the repo."""
+    from keystones.checks import c2_orphan_entries, c5_stored_source
+
+    staged, findings = _staged_entries(cfg, paths)
+    targets = {entry.target.split("::")[0].split("#")[0] for entry in staged.values()}
+    resolved, found, skipped = collect(cfg, sorted({*paths, *targets}))
+    findings += found
+
+    entries = dict(staged)
+    for item in resolved:
+        # Every category, so a marker naming the wrong one still meets its entry.
+        for category in cfg.categories:
+            key = (category, item.marker.id)
+            path = cfg.sidecar_path(*key)
+            if key not in entries and path.is_file():
+                entries[key] = sidecar.parse(path, category)
+    findings += run_all(
+        cfg,
+        resolved,
+        list(entries.values()),
+        scoped=True,
+        warn_only=args.warn_only,
+    )
+    findings += c5_stored_source(staged)
+    findings += c2_orphan_entries(resolved, staged, skipped)
+    if not resolved and not staged and not findings:
+        return 0
+    _report(findings, args.format or _default_format())
+    if all(f.severity is Severity.NOTICE for f in findings):
+        print(f"keystones: {len(resolved)} keystone(s) verified")
+    return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
+
+
 def cmd_check(args, cfg: Config) -> int:
     paths = None if args.all else (args.paths or None)
-    scoped = paths is not None
+    if paths is not None:
+        return _check_paths(args, cfg, paths)
     base = None
-    if not scoped and not args.no_base:
+    if not args.no_base:
         base = gitref.resolve_base(cfg.repo_root, args.base)
         if base is None:
             print(
@@ -65,12 +123,11 @@ def cmd_check(args, cfg: Config) -> int:
                 "Pass --base <ref>, or --no-base to silence this.",
                 file=sys.stderr,
             )
-    resolved, findings, skipped = collect(cfg, paths)
+    resolved, findings, skipped = collect(cfg, None)
     findings = findings + run_all(
         cfg,
         resolved,
         _entries(cfg),
-        scoped=scoped,
         warn_only=args.warn_only,
         base=base,
         skipped=skipped,

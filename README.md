@@ -34,7 +34,7 @@ repos:
   - repo: https://github.com/KyleJamesWalker/keystones
     rev: v0.1.0
     hooks:
-      - id: keystones          # staged files, warns on drift
+      - id: keystones          # staged text files, warns on drift
       - id: keystones-all      # whole repo, blocking
         additional_dependencies: ["tree-sitter-language-pack==1.20.0"]
 ```
@@ -45,7 +45,10 @@ the grammar version for your repo without colliding with anything your project
 itself depends on, and without waiting for a keystones release to move it. The
 package declares a range; your repo decides the version.
 
-The local hook is advisory: `--no-verify` skips it. The gate is
+The staged hook runs on every staged text file, whatever the language: a file
+with no marker in it costs one read and prints nothing, and a staged sidecar is
+checked against its keystone even when the code it covers is not staged. It is
+advisory: `--no-verify` skips it. The gate is
 `keystones check --all` running in CI, which cannot be skipped. Put
 `.pre-commit-config.yaml` in CODEOWNERS, or the gate can be removed by deleting
 three lines of YAML.

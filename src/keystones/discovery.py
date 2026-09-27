@@ -69,7 +69,9 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
         full = cfg.repo_root / rel
         if not full.is_file():
             continue
-        if rel.endswith(parsed):
+        # A named file with no marker in it has nothing to resolve, so only a
+        # whole-repo scan pays to parse one.
+        if rel.endswith(parsed) and paths is None:
             out.append(rel)
             continue
         text = _readable(full)
