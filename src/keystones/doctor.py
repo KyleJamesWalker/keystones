@@ -95,7 +95,17 @@ def _token() -> str:
     for name in ("GH_TOKEN", "GITHUB_TOKEN"):
         if os.environ.get(name):
             return os.environ[name]
-    raise Unavailable("no GH_TOKEN or GITHUB_TOKEN in the environment")
+    try:
+        token = subprocess.run(
+            ["gh", "auth", "token"], capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        token = ""
+    if token:
+        return token
+    raise Unavailable(
+        "no GH_TOKEN or GITHUB_TOKEN in the environment, and `gh auth token` gave none"
+    )
 
 
 def _get(path: str, token: str) -> tuple[int, object]:

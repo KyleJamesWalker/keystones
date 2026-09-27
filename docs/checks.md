@@ -49,7 +49,7 @@ GitHub API.
 | CODEOWNERS covers the path | pass, as with the flag off |
 | CODEOWNERS does not, and a `required_reviewers` rule with at least one approval covers it | notice naming the ruleset |
 | Neither covers it | the usual C8 error |
-| The rules cannot be read, for example with no token | warning, then CODEOWNERS alone decides |
+| The rules cannot be read, for example with no token from the environment or `gh auth token` | warning, then CODEOWNERS alone decides |
 
 ## Other findings
 

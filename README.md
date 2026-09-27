@@ -162,8 +162,8 @@ codeowners_from_rulesets = true
 
 C8 then accepts a `required_reviewers` rule whose file pattern covers a path
 that has no CODEOWNERS owner, and prints a notice naming the ruleset. It reads
-the rules with `GH_TOKEN` or `GITHUB_TOKEN`; without one it warns and checks
-CODEOWNERS alone. Off by default, and with it off C8 reads only CODEOWNERS.
+the rules with `GH_TOKEN`, `GITHUB_TOKEN` or, failing both, `gh auth token`;
+without any it warns and checks CODEOWNERS alone. Off by default, and with it off C8 reads only CODEOWNERS.
 
 ## What changing "the code" means
 
@@ -200,7 +200,8 @@ CODEOWNERS-gated and the deletion is legible in the diff. Known gaps:
   dismisses stale approvals. `keystones doctor` audits both, merges them as
   GitHub does, and names the source of each requirement. Rulesets are readable
   with any token that can read the repo; classic branch protection needs
-  `admin:repo`. With no token it skips; with a token it cannot use, it fails
+  `admin:repo`. It takes `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`. With
+  no token it skips; with a token it cannot use, it fails
   rather than reporting success it cannot vouch for.
 - **A keystone protects one definition, not a name.** It records the target it
   covers and fails if the marker moves off it, but nothing stops a caller being

@@ -109,12 +109,38 @@ def test_invalid_codeowners_line_is_an_error(tmp_path, api):
     assert any("silently inert" in f.message for f in errors(doctor.run(tmp_path)))
 
 
-def test_no_token_is_a_skip_not_a_failure(tmp_path, monkeypatch):
+def fake_gh(monkeypatch, stdout="", error=None):
+    """Stand in for `gh auth token`, so no test reads a real login."""
+    import subprocess
+
+    def run(argv, **kwargs):
+        assert argv == ["gh", "auth", "token"]
+        if error is not None:
+            raise error
+        return subprocess.CompletedProcess(argv, 0 if stdout else 1, stdout, "")
+
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(doctor.subprocess, "run", run)
+
+
+@pytest.mark.parametrize("error", [None, FileNotFoundError("gh")])
+def test_no_token_is_a_skip_not_a_failure(tmp_path, monkeypatch, error):
+    fake_gh(monkeypatch, error=error)
     monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
-    with pytest.raises(doctor.Unavailable):
+    with pytest.raises(doctor.Unavailable, match="gh auth token"):
         doctor.run(tmp_path)
+
+
+def test_a_gh_login_stands_in_for_a_token(monkeypatch):
+    fake_gh(monkeypatch, stdout="gho_example\n")
+    assert doctor._token() == "gho_example"
+
+
+def test_an_environment_token_wins_over_gh(monkeypatch):
+    fake_gh(monkeypatch, stdout="gho_example\n")
+    monkeypatch.setenv("GITHUB_TOKEN", "from-env")
+    assert doctor._token() == "from-env"
 
 
 def ruleset_rules(ruleset_id=7, source_type="Organization", **overrides):
