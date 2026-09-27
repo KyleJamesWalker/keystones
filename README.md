@@ -3,6 +3,14 @@
 Force SME review of load-bearing code by pinning a review gate to an AST node
 instead of a file path.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=QAEkJ54h36Y">
+    <img src="https://raw.githubusercontent.com/KyleJamesWalker/keystones/main/docs/keystones-explainer.webp" width="320" alt="Keystones explainer video">
+  </a>
+  <br>
+  <a href="https://www.youtube.com/watch?v=QAEkJ54h36Y">▶ Watch the explainer</a>
+</p>
+
 Mark a function with a one-line comment. A CODEOWNERS-guarded sidecar file
 records its canonical hash, its source and the reason it matters. Change the
 function and the hash stops matching, so the only way to get a green build is to
