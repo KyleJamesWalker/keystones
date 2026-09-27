@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "keystones"
 dynamic = ["version"]
-description = "Force SME review of load-bearing code by pinning a review gate to an AST node"
+description = "Require SME review of load-bearing code by pinning a review gate to an AST node"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

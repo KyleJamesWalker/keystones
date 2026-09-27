@@ -1,4 +1,4 @@
-"""Force SME review of load-bearing code by pinning a review gate to an AST node."""
+"""Require SME review of load-bearing code by pinning a review gate to an AST node."""
 
 from importlib.metadata import PackageNotFoundError, version
 
