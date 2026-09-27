@@ -77,7 +77,7 @@ def cmd_check(args, cfg: Config) -> int:
     )
     _report(findings, args.format or _default_format())
     errors = [f for f in findings if f.severity is Severity.ERROR]
-    if not findings:
+    if all(f.severity is Severity.NOTICE for f in findings):
         print(f"keystones: {len(resolved)} keystone(s) verified")
     return 1 if errors else 0
 

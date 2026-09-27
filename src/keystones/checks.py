@@ -306,25 +306,63 @@ def run_all(
     return findings
 
 
+def _ruleset_reviewers(cfg: Config) -> tuple[list, list[Finding]]:
+    """The rules C8 may accept in place of CODEOWNERS, when the repo opts in."""
+    from keystones import doctor
+
+    if not cfg.codeowners_from_rulesets:
+        return [], []
+    try:
+        return doctor.required_reviewers(cfg.repo_root), []
+    except doctor.Unavailable as exc:
+        return [], [
+            Finding(
+                "C8",
+                Severity.WARNING,
+                f"codeowners_from_rulesets is on, but the branch rules could not "
+                f"be read ({exc}), so only CODEOWNERS was checked",
+            )
+        ]
+
+
+def _covered_by_ruleset(
+    ruled: list, rel: str, problem: Finding, what: str | None = None
+) -> Finding:
+    """A notice naming the ruleset that covers `rel`, or the problem unchanged."""
+    for rule in ruled:
+        pattern = rule.covering(rel)
+        if pattern is not None:
+            return Finding(
+                "C8",
+                Severity.NOTICE,
+                f"{what or rel} is owned by {rule.source}, which requires "
+                f"{rule.minimum_approvals} approval(s) from {rule.reviewer} on "
+                f"'{pattern}'",
+            )
+    return problem
+
+
 def c8_ownership(cfg: Config) -> list[Finding]:
     """The gate is only real if its own files are owned. See keystones/codeowners.py."""
     from keystones import codeowners
 
     owners_file, rules = codeowners.find(cfg.repo_root)
-    if owners_file is None:
+    ruled, findings = _ruleset_reviewers(cfg)
+    if owners_file is None and not ruled:
         return [
+            *findings,
             Finding(
                 "C8",
                 Severity.ERROR,
                 "no CODEOWNERS file; every keystone is unguarded. Expected one of "
                 + ", ".join(codeowners.SEARCH_PATHS),
-            )
+            ),
         ]
 
-    owners_rel = str(owners_file.relative_to(cfg.repo_root))
-    findings: list[Finding] = []
+    owners_rel = str(owners_file.relative_to(cfg.repo_root)) if owners_file else None
 
-    gate_files = [owners_rel, "pyproject.toml"]
+    gate_files = [owners_rel] if owners_rel else []
+    gate_files.append("pyproject.toml")
     for extra in (".pre-commit-config.yaml", ".pre-commit-hooks.yaml"):
         if (cfg.repo_root / extra).is_file():
             gate_files.append(extra)
@@ -338,12 +376,16 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         rule = codeowners.owners_for(rules, rel)
         if rule is None or not rule.owners:
             findings.append(
-                Finding(
-                    "C8",
-                    Severity.ERROR,
-                    f"{rel} is part of the gate but has no CODEOWNERS owner, so the "
-                    "gate can be removed without review",
-                    owners_rel,
+                _covered_by_ruleset(
+                    ruled,
+                    rel,
+                    Finding(
+                        "C8",
+                        Severity.ERROR,
+                        f"{rel} is part of the gate but has no CODEOWNERS owner, "
+                        "so the gate can be removed without review",
+                        owners_rel,
+                    ),
                 )
             )
 
@@ -351,28 +393,30 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         probe = f"{cfg.root}/{category}/_probe.md"
         rule = codeowners.owners_for(rules, probe)
         if rule is None or not rule.owners:
-            findings.append(
-                Finding(
-                    "C8",
-                    Severity.ERROR,
-                    f"category '{category}' has no CODEOWNERS owner; editing its "
-                    "sidecars would require no review",
-                    owners_rel,
-                )
+            problem = Finding(
+                "C8",
+                Severity.ERROR,
+                f"category '{category}' has no CODEOWNERS owner; editing its "
+                "sidecars would require no review",
+                owners_rel,
             )
+        elif not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
+            problem = Finding(
+                "C8",
+                Severity.ERROR,
+                f"category '{category}' is owned by '{rule.pattern}' "
+                f"(line {rule.lineno}), a rule outside {cfg.root}/. CODEOWNERS is "
+                "last-match-wins, so that pattern silently reassigned the sidecars",
+                owners_rel,
+                rule.lineno,
+            )
+        else:
             continue
-        if not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
-            findings.append(
-                Finding(
-                    "C8",
-                    Severity.ERROR,
-                    f"category '{category}' is owned by '{rule.pattern}' "
-                    f"(line {rule.lineno}), a rule outside {cfg.root}/. CODEOWNERS is "
-                    "last-match-wins, so that pattern silently reassigned the sidecars",
-                    owners_rel,
-                    rule.lineno,
-                )
+        findings.append(
+            _covered_by_ruleset(
+                ruled, probe, problem, f"category '{category}' ({cfg.root}/{category}/)"
             )
+        )
     return findings
 
 

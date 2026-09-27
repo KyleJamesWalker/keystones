@@ -105,6 +105,8 @@ class Config:
     exclude: tuple[str, ...] = ()
     categories: tuple[str, ...] = ("default",)
     languages: tuple[LanguageConfig, ...] = ()
+    # Let a ruleset's required_reviewers stand in for CODEOWNERS in C8.
+    codeowners_from_rulesets: bool = False
 
     @property
     def sidecar_root(self) -> Path:
@@ -440,6 +442,11 @@ def load(repo_root: Path | None = None) -> Config:
     if data is None:
         raise ConfigError("no [tool.keystones] section in pyproject.toml")
     categories = tuple(data.get("categories", ["default"]))
+    from_rulesets = data.get("codeowners_from_rulesets", False)
+    if not isinstance(from_rulesets, bool):
+        raise ConfigError(
+            "tool.keystones.codeowners_from_rulesets must be true or false"
+        )
     if "default" not in categories:
         categories = ("default", *categories)
     return Config(
@@ -448,4 +455,5 @@ def load(repo_root: Path | None = None) -> Config:
         exclude=tuple(data.get("exclude", [])),
         categories=categories,
         languages=_languages(data),
+        codeowners_from_rulesets=from_rulesets,
     )

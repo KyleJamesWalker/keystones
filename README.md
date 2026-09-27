@@ -141,6 +141,19 @@ keystones/
 /keystones/finance/  @org/finance-eng
 ```
 
+A repo whose sidecars are guarded by a ruleset's required reviewers instead,
+which repo admins cannot edit, opts in:
+
+```toml
+[tool.keystones]
+codeowners_from_rulesets = true
+```
+
+C8 then accepts a `required_reviewers` rule whose file pattern covers a path
+that has no CODEOWNERS owner, and prints a notice naming the ruleset. It reads
+the rules with `GH_TOKEN` or `GITHUB_TOKEN`; without one it warns and checks
+CODEOWNERS alone. Off by default, and with it off C8 reads only CODEOWNERS.
+
 ## What changing "the code" means
 
 The hash is taken over a canonical rendering of the AST node, not its text.

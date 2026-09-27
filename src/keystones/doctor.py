@@ -42,6 +42,29 @@ class RequiredReviewers:
     reviewer: str
     source: str
 
+    def covering(self, path: str) -> str | None:
+        """The pattern that puts `path` under this rule, if one does."""
+        if self.minimum_approvals < 1:
+            return None
+        return next((p for p in self.patterns if _fnmatch_path(p, path)), None)
+
+
+def _fnmatch_path(pattern: str, path: str) -> bool:
+    """fnmatch with FNM_PATHNAME: `*` stays within a segment, `**` crosses them."""
+    out, i, body = [], 0, pattern.lstrip("/")
+    while i < len(body):
+        if body.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif body.startswith("**", i):
+            out.append(".*")
+            i += 2
+        else:
+            char = body[i]
+            out.append({"*": "[^/]*", "?": "[^/]"}.get(char, re.escape(char)))
+            i += 1
+    return re.fullmatch("".join(out), path) is not None
+
 
 @dataclass
 class Report:
@@ -130,6 +153,39 @@ def _rejected(status: int) -> Finding:
         f"the token was rejected: HTTP {status}. It is invalid or "
         "expired, so this audit vouches for nothing.",
     )
+
+
+def _reviewers_in(params: dict, label: str) -> list[RequiredReviewers]:
+    out = []
+    for entry in params.get("required_reviewers") or []:
+        reviewer = entry.get("reviewer") or {}
+        out.append(
+            RequiredReviewers(
+                tuple(entry.get("file_patterns") or ()),
+                int(entry.get("minimum_approvals") or 0),
+                f"{reviewer.get('type', '')} {reviewer.get('id', '')}".strip(),
+                label,
+            )
+        )
+    return out
+
+
+def required_reviewers(repo_root: Path) -> list[RequiredReviewers]:
+    """Only the ruleset rules that name reviewers for paths. See C8."""
+    owner, repo = slug(repo_root)
+    token = _token()
+    status, meta = _get(f"/repos/{owner}/{repo}", token)
+    branch = meta.get("default_branch", "main") if isinstance(meta, dict) else "main"
+    status, rules = _paged(f"/repos/{owner}/{repo}/rules/branches/{branch}", token)
+    if status != 200:
+        raise Unavailable(f"cannot read the rules for '{branch}': HTTP {status}")
+    names: dict = {}
+    out = []
+    for rule in rules:
+        if isinstance(rule, dict) and rule.get("type") == "pull_request":
+            label = _ruleset_label(owner, repo, rule, token, names)
+            out += _reviewers_in(rule.get("parameters") or {}, label)
+    return out
 
 
 def run(repo_root: Path, required_check: str = "keystones") -> list[Finding]:
@@ -250,16 +306,7 @@ def audit(repo_root: Path, required_check: str = "keystones") -> Report:
             satisfied.setdefault(APPROVALS, label)
         if params.get("dismiss_stale_reviews_on_push"):
             satisfied.setdefault(STALE, label)
-        for entry in params.get("required_reviewers") or []:
-            reviewer = entry.get("reviewer") or {}
-            report.required_reviewers.append(
-                RequiredReviewers(
-                    tuple(entry.get("file_patterns") or ()),
-                    int(entry.get("minimum_approvals") or 0),
-                    f"{reviewer.get('type', '')} {reviewer.get('id', '')}".strip(),
-                    label,
-                )
-            )
+        report.required_reviewers += _reviewers_in(params, label)
 
     if REVIEW not in satisfied:
         findings.append(

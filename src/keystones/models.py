@@ -70,6 +70,8 @@ class Entry:
 class Severity(StrEnum):
     ERROR = "error"
     WARNING = "warning"
+    # Passed, but by a route worth saying out loud.
+    NOTICE = "notice"
 
 
 @dataclass(frozen=True)
