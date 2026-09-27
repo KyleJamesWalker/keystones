@@ -207,8 +207,16 @@ def run(repo_root: Path, required_check: str = "keystones") -> list[Finding]:
     return audit(repo_root, required_check).findings
 
 
-def audit(repo_root: Path, required_check: str = "keystones") -> Report:
-    """Classic branch protection and rulesets together, as GitHub enforces them."""
+def audit(
+    repo_root: Path,
+    required_check: str = "keystones",
+    sidecar_paths: list[str] | None = None,
+) -> Report:
+    """Classic branch protection and rulesets together, as GitHub enforces them.
+
+    `sidecar_paths`, given under `codeowners_from_rulesets`, lets required
+    reviewers covering every one of them stand in for code owner review.
+    """
     owner, repo = slug(repo_root)
     token = _token()
     report = Report()
@@ -323,6 +331,15 @@ def audit(repo_root: Path, required_check: str = "keystones") -> Report:
             satisfied.setdefault(STALE, label)
         report.required_reviewers += _reviewers_in(params, label)
 
+    if CODE_OWNER not in satisfied and sidecar_paths:
+        covering = [
+            next((r for r in report.required_reviewers if r.covering(p)), None)
+            for p in sidecar_paths
+        ]
+        if all(covering):
+            sources = sorted({r.source for r in covering})
+            satisfied[CODE_OWNER] = "required reviewers in " + ", ".join(sources)
+
     if REVIEW not in satisfied:
         findings.append(
             Finding(
@@ -366,7 +383,9 @@ def audit(repo_root: Path, required_check: str = "keystones") -> Report:
             )
         )
 
-    relied_on = set(satisfied.values())
+    relied_on = {
+        label for _, label in rules if any(label in v for v in satisfied.values())
+    }
     for rule, label in rules:
         ruleset = rulesets.get(rule.get("ruleset_id"))
         if label not in relied_on:

@@ -650,7 +650,12 @@ def cmd_doctor(args, cfg: Config) -> int:
     from keystones import doctor
 
     try:
-        report = doctor.audit(cfg.repo_root, args.required_check)
+        sidecar_paths = (
+            [f"{cfg.root}/{category}/_probe.md" for category in cfg.categories]
+            if cfg.codeowners_from_rulesets
+            else None
+        )
+        report = doctor.audit(cfg.repo_root, args.required_check, sidecar_paths)
     except doctor.Unavailable as exc:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0

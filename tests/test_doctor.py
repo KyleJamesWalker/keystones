@@ -288,3 +288,47 @@ def test_a_bypass_list_the_token_cannot_see_warns(tmp_path, api, rulesets):
     assert errors(findings) == []
     (message,) = warnings(findings)
     assert "cannot read who may bypass it" in message
+
+
+def _required_reviewers_only(repo, api, patterns, *, on=True):
+    if on:
+        pyproject = repo / "pyproject.toml"
+        pyproject.write_text(
+            pyproject.read_text() + "codeowners_from_rulesets = true\n"
+        )
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules(
+        require_code_owner_review=False,
+        required_reviewers=[
+            {
+                "file_patterns": patterns,
+                "minimum_approvals": 1,
+                "reviewer": {"id": 42, "type": "Team"},
+            }
+        ],
+    )
+    api["rulesets"] = {7: {"name": "owners", "bypass_actors": []}}
+
+
+def test_required_reviewers_stand_in_for_code_owner_review(repo, run_cli, api, capsys):
+    _required_reviewers_only(repo, api, ["keystones/**"])
+    assert run_cli("doctor") == 0
+    out = capsys.readouterr().out
+    assert (
+        "code owner review: required reviewers in ruleset 'owners' "
+        "(organization acme)" in out
+    )
+
+
+def test_without_the_flag_code_owner_review_is_still_required(
+    repo, run_cli, api, capsys
+):
+    _required_reviewers_only(repo, api, ["keystones/**"], on=False)
+    assert run_cli("doctor") == 1
+    assert "Code Owners" in capsys.readouterr().err
+
+
+def test_required_reviewers_must_cover_every_category(repo, run_cli, api, capsys):
+    _required_reviewers_only(repo, api, ["keystones/finance/**"])
+    assert run_cli("doctor") == 1
+    assert "Code Owners" in capsys.readouterr().err

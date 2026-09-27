@@ -163,7 +163,12 @@ codeowners_from_rulesets = true
 C8 then accepts a `required_reviewers` rule whose file pattern covers a path
 that has no CODEOWNERS owner, and prints a notice naming the ruleset. It reads
 the rules with `GH_TOKEN`, `GITHUB_TOKEN` or, failing both, `gh auth token`;
-without any it warns and checks CODEOWNERS alone. Off by default, and with it off C8 reads only CODEOWNERS.
+without any it warns and checks CODEOWNERS alone. Off by default, and with it
+off C8 reads only CODEOWNERS.
+
+`keystones doctor` honours the flag too: required reviewers that cover every
+category's sidecars stand in for "Require review from Code Owners", which a
+ruleset-guarded repo may have no reason to turn on.
 
 ## What changing "the code" means
 
