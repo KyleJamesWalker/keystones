@@ -24,7 +24,7 @@ lines. That is why those rules get deleted. A keystone protects a key function.
 
 ```bash
 pip install keystones          # Python only, zero dependencies
-pip install 'keystones[all]'   # adds TypeScript, JavaScript, Go and Terraform
+pip install 'keystones[all]'   # adds TypeScript, JavaScript, Go, Terraform and SQL
 ```
 
 As a pre-commit hook:
@@ -245,6 +245,12 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | Terraform, HCL | block, region, file | yes, tree-sitter |
 | SQL | view, table, function, CTE, region, file | yes, tree-sitter |
 | everything else | region, file | no, normalised text |
+
+Those are the built-in languages. Any other grammar the pack carries, such as
+Java, Rust or C#, works at node granularity once a
+`[[tool.keystones.language]]` table names it; see
+[Adding a language](#adding-a-language). BigQuery SQL ships as `sql_bigquery`,
+which claims no extension until a table points one at it.
 
 ### Choosing what a keystone is hashed on
 
