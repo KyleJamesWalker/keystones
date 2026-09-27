@@ -118,3 +118,26 @@ def test_missing_base_ref_skips_c9_rather_than_guessing(repo, run_cli, based):
     (repo / "keystones" / "finance" / "payout-rounding.md").unlink()
     run_cli("index")
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_moving_a_keystone_to_another_category_is_a_removal(
+    repo, run_cli, based, capsys
+):
+    """The category losing it has to approve, or re-homing is a quiet way out."""
+    path = repo / PAYOUT
+    path.write_text(
+        path.read_text().replace(
+            "# keystone(finance): payout-rounding", "# keystone: payout-rounding"
+        )
+    )
+    (repo / "keystones" / "default").mkdir(exist_ok=True)
+    (repo / "keystones" / "finance" / "payout-rounding.md").rename(
+        repo / "keystones" / "default" / "payout-rounding.md"
+    )
+    run_cli("index")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 0, "the move itself is consistent"
+    assert run_cli("check", "--all", "--base", based) == 1
+    err = capsys.readouterr().err
+    assert "keystone 'payout-rounding' was removed" in err
+    assert "owner of category 'finance'" in err
