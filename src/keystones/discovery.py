@@ -62,8 +62,9 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
     candidates = paths if paths is not None else _tracked_files(cfg.repo_root)
     parsed = adapters.parsed_extensions()
     out = []
+    sidecars = f"{cfg.root.strip('/')}/"
     for rel in candidates:
-        if cfg.is_excluded(rel):
+        if cfg.is_excluded(rel) or rel.startswith(sidecars):
             continue
         full = cfg.repo_root / rel
         if not full.is_file():

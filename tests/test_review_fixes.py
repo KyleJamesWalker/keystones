@@ -213,6 +213,19 @@ def test_a_configured_double_star_exclude_covers_the_root(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
 
 
+def test_the_sidecar_root_is_never_scanned_as_source(repo, run_cli):
+    """A whole-file sidecar stores the source, marker line included."""
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text().replace('"keystones"', '"gates"'))
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/gates/ @org/eng\n/pyproject.toml @org/eng\n/.github/CODEOWNERS @org/eng\n"
+    )
+    (repo / "gates").mkdir()
+    (repo / "gates" / "notes.md").write_text("# keystone: stray\n")
+    assert run_cli("check", "--all", "--no-base") == 0
+    assert run_cli("check", "gates/notes.md") == 0
+
+
 # --- CLI -------------------------------------------------------------------
 
 
