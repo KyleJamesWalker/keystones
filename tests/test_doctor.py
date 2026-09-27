@@ -19,11 +19,23 @@ HEALTHY = {
 @pytest.fixture
 def api(monkeypatch):
     """Route every API read through a table the test controls."""
-    state = {"protection": HEALTHY, "errors": {"errors": []}, "protection_status": 200}
+    state = {
+        "protection": HEALTHY,
+        "errors": {"errors": []},
+        "protection_status": 200,
+        "rules": [],
+        "rules_status": 200,
+        "rulesets": {},
+    }
 
     def fake_get(path, token):
         if path.endswith("/codeowners/errors"):
             return 200, state["errors"]
+        if "/rules/branches/" in path:
+            return state["rules_status"], state["rules"]
+        if "/rulesets/" in path:
+            ruleset = state["rulesets"].get(int(path.rsplit("/", 1)[1]))
+            return (200, ruleset) if ruleset else (404, {})
         if "/branches/" in path:
             return state["protection_status"], state["protection"]
         return 200, {"default_branch": "main"}
@@ -103,3 +115,108 @@ def test_no_token_is_a_skip_not_a_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
     with pytest.raises(doctor.Unavailable):
         doctor.run(tmp_path)
+
+
+def ruleset_rules(ruleset_id=7, source_type="Organization", **overrides):
+    """What GET /rules/branches/{branch} returns for one healthy ruleset."""
+    source = {
+        "ruleset_id": ruleset_id,
+        "ruleset_source_type": source_type,
+        "ruleset_source": "acme",
+    }
+    params = {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": True,
+        "require_code_owner_review": True,
+        "require_last_push_approval": False,
+        "required_review_thread_resolution": False,
+        **overrides,
+    }
+    return [
+        {**source, "type": "pull_request", "parameters": params},
+        {
+            **source,
+            "type": "required_status_checks",
+            "parameters": {
+                "required_status_checks": [{"context": "keystones"}],
+                "strict_required_status_checks_policy": False,
+            },
+        },
+    ]
+
+
+def test_a_ruleset_alone_satisfies_every_requirement(tmp_path, api):
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {7: {"name": "protect-main"}}
+    report = doctor.audit(tmp_path)
+    assert errors(report.findings) == []
+    assert set(report.satisfied.values()) == {
+        "ruleset 'protect-main' (organization acme)"
+    }
+
+
+def test_a_member_token_is_enough_when_a_ruleset_applies(tmp_path, api):
+    """Classic protection needs admin to read; branch rules do not."""
+    api["protection_status"] = 403
+    api["rules"] = ruleset_rules()
+    assert errors(doctor.run(tmp_path)) == []
+
+
+def test_a_member_token_with_no_ruleset_is_still_a_skip(tmp_path, api):
+    api["protection_status"] = 403
+    with pytest.raises(doctor.Unavailable):
+        doctor.run(tmp_path)
+
+
+def test_a_ruleset_fills_what_classic_protection_leaves_out(tmp_path, api):
+    api["protection"] = {
+        **HEALTHY,
+        "required_pull_request_reviews": {
+            **HEALTHY["required_pull_request_reviews"],
+            "dismiss_stale_reviews": False,
+        },
+    }
+    api["rules"] = ruleset_rules(source_type="Repository")
+    report = doctor.audit(tmp_path)
+    assert errors(report.findings) == []
+    assert report.satisfied[doctor.CODE_OWNER] == doctor.CLASSIC
+    assert report.satisfied[doctor.STALE] == "ruleset 7 (repository acme)"
+
+
+def test_a_ruleset_without_code_owner_review_is_an_error(tmp_path, api):
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules(require_code_owner_review=False)
+    assert any("Code Owners" in f.message for f in errors(doctor.run(tmp_path)))
+
+
+def test_required_reviewers_are_reported(tmp_path, api):
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules(
+        required_reviewers=[
+            {
+                "file_patterns": ["keystones/**"],
+                "minimum_approvals": 2,
+                "reviewer": {"id": 42, "type": "Team"},
+            }
+        ]
+    )
+    (entry,) = doctor.audit(tmp_path).required_reviewers
+    assert entry.patterns == ("keystones/**",)
+    assert entry.minimum_approvals == 2
+    assert entry.source == "ruleset 7 (organization acme)"
+
+
+def test_a_token_the_rules_endpoint_rejects_is_an_error(tmp_path, api):
+    api["protection_status"] = 404
+    api["rules_status"] = 401
+    assert any("rejected" in f.message for f in errors(doctor.run(tmp_path)))
+
+
+def test_the_cli_names_the_source_of_each_requirement(repo, run_cli, api, capsys):
+    api["protection_status"] = 404
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {7: {"name": "protect-main"}}
+    assert run_cli("doctor") == 0
+    out = capsys.readouterr().out
+    assert "code owner review: ruleset 'protect-main' (organization acme)" in out

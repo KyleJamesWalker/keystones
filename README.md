@@ -172,10 +172,12 @@ CODEOWNERS-gated and the deletion is legible in the diff. Known gaps:
 - **Copy and repoint.** Copying the body to a new unmarked function and
   repointing callers is undetectable.
 - **CODEOWNERS is not self-executing.** It requests a reviewer. The block only
-  exists when branch protection requires Code Owner review and dismisses stale
-  approvals. `keystones doctor` audits that, and needs a token with
-  `admin:repo` to do it. With no token it skips; with a token it cannot use, it
-  fails rather than reporting success it cannot vouch for.
+  exists when branch protection or a ruleset requires Code Owner review and
+  dismisses stale approvals. `keystones doctor` audits both, merges them as
+  GitHub does, and names the source of each requirement. Rulesets are readable
+  with any token that can read the repo; classic branch protection needs
+  `admin:repo`. With no token it skips; with a token it cannot use, it fails
+  rather than reporting success it cannot vouch for.
 - **A keystone protects one definition, not a name.** It records the target it
   covers and fails if the marker moves off it, but nothing stops a caller being
   repointed at different code entirely.

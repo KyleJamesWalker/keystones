@@ -537,11 +537,14 @@ def cmd_doctor(args, cfg: Config) -> int:
     from keystones import doctor
 
     try:
-        findings = doctor.run(cfg.repo_root, args.required_check)
+        report = doctor.audit(cfg.repo_root, args.required_check)
     except doctor.Unavailable as exc:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0
+    findings = report.findings
     _report(findings, args.format or _default_format())
+    for requirement, source in report.satisfied.items():
+        print(f"  {requirement}: {source}")
     if not findings:
         print("keystones doctor: branch protection requires owner review")
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
