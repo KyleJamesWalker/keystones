@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import re
 import textwrap
 import warnings
 from dataclasses import dataclass
@@ -405,11 +406,19 @@ def _render(
     return f"{node.type}({','.join(parts)})"
 
 
+# A destructuring declarator is named by its pattern, `{ a, b } = ...`.
+_PATTERNS = frozenset({"object_pattern", "array_pattern"})
+
+
 def _node_name(node, spec: LanguageSpec) -> str | None:
     for field_name in spec.name_fields:
         child = node.child_by_field_name(field_name)
         if child is not None:
-            return child.text.decode("utf-8", "replace")
+            text = child.text.decode("utf-8", "replace")
+            if child.type in _PATTERNS:
+                # Spelled as a formatter left it, the name would move on a reformat.
+                text = re.sub(r",(?=[}\]])", "", re.sub(r"\s+", "", text))
+            return text
     if spec.label_children:
         labels = [
             c.text.decode("utf-8", "replace").strip('"')
