@@ -171,6 +171,37 @@ def test_file_scope_marker_goes_below_a_shebang(repo, run_cli):
     assert script.read_text().splitlines()[0] == "#!/usr/bin/env python3"
 
 
+@pytest.mark.parametrize(
+    ("path", "src", "extra", "marker"),
+    [
+        ("tool.py", "def f():\n    return 1\n", [], "# keystone(file): whole"),
+        pytest.param(
+            "main.tf",
+            'resource "x" "y" {\n  a = 1\n}\n',
+            [],
+            "# keystone(file): whole",
+            marks=pytest.mark.skipif(not ts.available(), reason="needs 'all'"),
+        ),
+        pytest.param(
+            "orders.sql",
+            "select 1 as x\n",
+            ["--hash", "text"],
+            "-- keystone(file, hash=text): whole",
+            marks=pytest.mark.skipif(not ts.available(), reason="needs 'all'"),
+        ),
+        ("notes.yaml", "a: 1\n", [], "# keystone(file): whole"),
+    ],
+    ids=["python", "hcl", "sql-text", "yaml"],
+)
+def test_add_without_a_symbol_writes_a_whole_file_marker(
+    repo, run_cli, capsys, path, src, extra, marker
+):
+    (repo / path).write_text(src)
+    assert run_cli("add", path, "--id", "whole", "-m", "why.", *extra) == 0
+    assert (repo / path).read_text().splitlines()[0] == marker
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+
+
 # --- sidecar robustness ----------------------------------------------------
 
 

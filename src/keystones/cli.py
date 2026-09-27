@@ -471,8 +471,11 @@ def cmd_add(args, cfg: Config) -> int:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
 
-    leader = adapter.comment_prefix(rel)
-    quals = [] if args.category == "default" else [args.category]
+    # The file's language decides the comment syntax, not the chosen basis.
+    leader = adapters.for_path(rel).comment_prefix(rel)
+    quals = ["file"] if scope is Scope.FILE else []
+    if args.category != "default":
+        quals.append(args.category)
     if getattr(args, "hash_kind", None):
         quals.append(f"hash={args.hash_kind}")
     keyword = f"keystone({', '.join(quals)})" if quals else "keystone"
