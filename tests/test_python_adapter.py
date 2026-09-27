@@ -88,3 +88,31 @@ def test_canonical_source_includes_decorators():
     assert source.startswith("@functools.cache")
     rehashed = adapter.hash_stored_source(source, "x.py::compute_payout")
     assert rehashed == adapter.hashes(DECORATED, target)[0]
+
+
+GUARD = """import pytest
+
+
+# keystone: guard
+def test_guard():
+    assert 1
+"""
+
+
+@pytest.mark.parametrize(
+    "decorator",
+    [
+        "@pytest.mark.skip(reason='flaky')",
+        "@pytest.mark.xfail",
+        "@pytest.mark.skipif(True, reason='x')",
+    ],
+)
+def test_switching_off_a_guard_test_is_drift(repo, run_cli, capsys, decorator):
+    """The change most worth catching on a test keystone is the one that disables it."""
+    (repo / "test_guard.py").write_text(GUARD)
+    assert run_cli("add", "--id", "guard", "-m", "Guards the rounding contract.") == 0
+    (repo / "test_guard.py").write_text(
+        GUARD.replace("def test_guard", f"{decorator}\ndef test_guard")
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'guard' changed" in capsys.readouterr().err
