@@ -602,6 +602,12 @@ def hash_stored_source(source: str, target: str) -> str:
     fragment = textwrap.dedent(source)
 
     root = _parse(spec, fragment, strict=False).root_node
+    if root.has_error and "cte" in spec.definitions:
+        # A CTE below its WITH line is stored as `name as (...)`, not SQL alone.
+        body = fragment.strip().strip(",").strip()
+        shelled = _parse(spec, f"with {body} select 1", strict=False).root_node
+        if not shelled.has_error:
+            root = shelled
     for _name, node in _definitions(root, spec):
         # Must render from the same node `hashes` does: the outermost wrapper.
         return digest(
