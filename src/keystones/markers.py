@@ -164,7 +164,7 @@ def scan_lines(
     path: str,
     src: str,
     candidates: list[tuple[int, str]] | None = None,
-) -> tuple[list[Marker], dict[str, tuple[int, int]]]:
+) -> tuple[list[Marker], dict[tuple[str, str], tuple[int, int]]]:
     """Scan for point and region markers, returning each region's body range.
 
     `candidates` lets an adapter with a lexer supply only real comments, so a
@@ -172,7 +172,7 @@ def scan_lines(
     considered, which is all a parser-less file can offer.
     """
     markers: list[Marker] = []
-    regions: dict[str, tuple[int, int]] = {}
+    regions: dict[tuple[str, str], tuple[int, int]] = {}
     open_marker: Marker | None = None
 
     if is_ignored(src):
@@ -196,7 +196,7 @@ def scan_lines(
                 raise RegionError(
                     f"{path}:{lineno}: keystone:end with no matching start"
                 )
-            regions[open_marker.id] = (open_marker.lineno + 1, lineno - 1)
+            regions[open_marker.key] = (open_marker.lineno + 1, lineno - 1)
             markers.append(open_marker)
             open_marker = None
             continue

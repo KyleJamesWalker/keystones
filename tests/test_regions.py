@@ -48,7 +48,7 @@ def edit_config(repo: Path, old: str, new: str) -> None:
 
 def test_region_body_excludes_the_marker_lines():
     _, regions = scan_lines("net.yaml", CONFIG)
-    assert regions["vpc-peering-cidrs"] == (5, 7)
+    assert regions[("infra", "vpc-peering-cidrs")] == (5, 7)
 
 
 def test_region_marker_carries_its_category():

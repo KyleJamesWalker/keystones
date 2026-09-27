@@ -25,6 +25,10 @@ class Marker:
     # only answer for a file whose extension has exactly one parser.
     hash_kind: str | None = None
 
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.category, self.id)
+
 
 @dataclass(frozen=True)
 class Target:
@@ -65,6 +69,11 @@ class Entry:
     source_lang: str = "python"
     history: list[str] = field(default_factory=list)
     path: str = ""
+
+    @property
+    def key(self) -> tuple[str, str]:
+        """Ids are unique within a category, matching `<root>/<category>/<id>.md`."""
+        return (self.category, self.id)
 
 
 class Severity(StrEnum):

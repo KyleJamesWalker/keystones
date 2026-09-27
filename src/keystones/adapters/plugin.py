@@ -83,9 +83,9 @@ def resolve(src: str, marker: Marker) -> Target:
 
     if marker.scope is Scope.REGION:
         _, regions = marker_grammar.scan_lines(marker.path, src, _comment_lines(tree))
-        if marker.id not in regions:
+        if marker.key not in regions:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is unbalanced")
-        start, end = regions[marker.id]
+        start, end = regions[marker.key]
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)

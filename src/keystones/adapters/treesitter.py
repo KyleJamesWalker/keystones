@@ -488,7 +488,7 @@ def markers(path: str, src: str) -> list[Marker]:
     return found
 
 
-def _regions(path: str, src: str) -> dict[str, tuple[int, int]]:
+def _regions(path: str, src: str) -> dict[tuple[str, str], tuple[int, int]]:
     spec = spec_for(path)
     root = _parse(spec, src).root_node
     return marker_grammar.scan_lines(path, src, _comment_lines(root, spec))[1]
@@ -500,9 +500,9 @@ def resolve(src: str, marker: Marker) -> Target:
 
     if marker.scope is Scope.REGION:
         regions = _regions(marker.path, src)
-        if marker.id not in regions:
+        if marker.key not in regions:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is unbalanced")
-        start, end = regions[marker.id]
+        start, end = regions[marker.key]
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)

@@ -10,19 +10,60 @@ from keystones.config import Config
 from keystones.discovery import Resolved
 from keystones.models import Entry, Finding, Severity
 
+Key = tuple[str, str]
+
+
+def shared_ids(resolved: list[Resolved], entries: dict[Key, Entry]) -> set[str]:
+    """Ids used in more than one category, which a bare `--id` cannot name."""
+    by_id: dict[str, set[str]] = defaultdict(set)
+    for category, keystone_id in [*entries, *(i.marker.key for i in resolved)]:
+        by_id[keystone_id].add(category)
+    return {keystone_id for keystone_id, cats in by_id.items() if len(cats) > 1}
+
+
+def ref(key: Key, shared: set[str]) -> str:
+    """The id as `--id` accepts it: qualified only where a bare id is ambiguous."""
+    category, keystone_id = key
+    return f"{category}/{keystone_id}" if keystone_id in shared else keystone_id
+
+
+def category_mismatches(
+    resolved: list[Resolved], entries: dict[Key, Entry]
+) -> dict[Key, Entry]:
+    """Markers whose only entry sits in another category, by marker key.
+
+    Reported once as C7 rather than as an orphan marker plus an orphan entry.
+    """
+    marked = {item.marker.key for item in resolved}
+    out = {}
+    for item in resolved:
+        if item.marker.key in entries:
+            continue
+        elsewhere = [
+            entry
+            for key, entry in sorted(entries.items())
+            if entry.id == item.marker.id and key not in marked
+        ]
+        if len(elsewhere) == 1:
+            out[item.marker.key] = elsewhere[0]
+    return out
+
 
 def c1_orphan_markers(
-    resolved: list[Resolved], entries: dict[str, Entry]
+    resolved: list[Resolved], entries: dict[Key, Entry]
 ) -> list[Finding]:
     out = []
+    mismatched = category_mismatches(resolved, entries)
+    shared = shared_ids(resolved, entries)
     for item in resolved:
-        if item.marker.id not in entries:
+        if item.marker.key not in entries and item.marker.key not in mismatched:
             out.append(
                 Finding(
                     "C1",
                     Severity.ERROR,
                     f"keystone '{item.marker.id}' has no sidecar entry; "
-                    f'run `keystones add --id {item.marker.id} -m "<why>"`',
+                    f"run `keystones add --id {ref(item.marker.key, shared)} "
+                    '-m "<why>"`',
                     item.marker.path,
                     item.marker.lineno,
                 )
@@ -32,10 +73,11 @@ def c1_orphan_markers(
 
 def c2_orphan_entries(
     resolved: list[Resolved],
-    entries: dict[str, Entry],
+    entries: dict[Key, Entry],
     skipped: set[str] | None = None,
 ) -> list[Finding]:
-    seen = {item.marker.id for item in resolved}
+    seen = {item.marker.key for item in resolved}
+    paired = {entry.key for entry in category_mismatches(resolved, entries).values()}
     unreadable = skipped or set()
     return [
         Finding(
@@ -45,8 +87,9 @@ def c2_orphan_entries(
             "removed or its file is excluded",
             entry.path,
         )
-        for entry_id, entry in sorted(entries.items())
-        if entry_id not in seen
+        for key, entry in sorted(entries.items())
+        if key not in seen
+        and key not in paired
         and entry.target.split("::")[0].split("#")[0] not in unreadable
     ]
 
@@ -54,13 +97,14 @@ def c2_orphan_entries(
 def c3_c4_hashes(
     cfg: Config,
     resolved: list[Resolved],
-    entries: dict[str, Entry],
+    entries: dict[Key, Entry],
     warn_only: bool = False,
 ) -> list[Finding]:
     out = []
     severity = Severity.WARNING if warn_only else Severity.ERROR
+    shared = shared_ids(resolved, entries)
     for item in resolved:
-        entry = entries.get(item.marker.id)
+        entry = entries.get(item.marker.key)
         if entry is None:
             continue
         # The basis is recorded in two places on purpose, so editing one and
@@ -99,7 +143,9 @@ def c3_c4_hashes(
             )
             continue
         target = str(item.target)
-        fix_hint = f'run `keystones fix --id {entry.id} -m "<why it changed>"`'
+        fix_hint = (
+            f'run `keystones fix --id {ref(entry.key, shared)} -m "<why it changed>"`'
+        )
 
         # Without this the marker can be moved onto a hash-identical decoy while
         # the real definition is rewritten, and every other check stays green.
@@ -156,11 +202,11 @@ def c3_c4_hashes(
     return out
 
 
-def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
+def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
     from keystones import adapters
 
     out = []
-    for entry in sorted(entries.values(), key=lambda e: e.id):
+    for entry in sorted(entries.values(), key=lambda e: (e.id, e.category)):
         if not entry.source:
             out.append(
                 Finding(
@@ -244,7 +290,7 @@ def c7_categories(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
     ]
 
 
-def c10_index(cfg: Config, entries: dict[str, Entry]) -> list[Finding]:
+def c10_index(cfg: Config, entries: dict[Key, Entry]) -> list[Finding]:
     from keystones.sidecar import render_index
 
     path = cfg.index_path
@@ -287,7 +333,7 @@ def run_all(
     skipped: set[str] | None = None,
 ) -> list[Finding]:
     """`scoped` means only some files were seen, so whole-repo checks are skipped."""
-    entries = {entry.id: entry for entry in entry_list}
+    entries = {entry.key: entry for entry in entry_list}
     findings = c1_orphan_markers(resolved, entries)
     findings += c3_c4_hashes(cfg, resolved, entries, warn_only=warn_only)
     findings += c7_categories(cfg, resolved)
@@ -513,22 +559,21 @@ def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
 
 
 def c7_category_agreement(
-    resolved: list[Resolved], entries: dict[str, Entry]
+    resolved: list[Resolved], entries: dict[Key, Entry]
 ) -> list[Finding]:
     """A mismatch means a different team reviews than the marker names."""
-    out = []
-    for item in resolved:
-        entry = entries.get(item.marker.id)
-        if entry is not None and entry.category != item.marker.category:
-            out.append(
-                Finding(
-                    "C7",
-                    Severity.ERROR,
-                    f"marker for '{entry.id}' says category "
-                    f"'{item.marker.category}' but its sidecar sits in "
-                    f"'{entry.category}', so a different team owns the review",
-                    item.marker.path,
-                    item.marker.lineno,
-                )
-            )
-    return out
+    mismatched = category_mismatches(resolved, entries)
+    return [
+        Finding(
+            "C7",
+            Severity.ERROR,
+            f"marker for '{item.marker.id}' says category "
+            f"'{item.marker.category}' but its sidecar sits in "
+            f"'{mismatched[item.marker.key].category}', so a different team owns "
+            "the review",
+            item.marker.path,
+            item.marker.lineno,
+        )
+        for item in resolved
+        if item.marker.key in mismatched
+    ]

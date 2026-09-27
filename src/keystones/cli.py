@@ -82,21 +82,49 @@ def cmd_check(args, cfg: Config) -> int:
     return 1 if errors else 0
 
 
+class AmbiguousId(Exception):
+    """A bare id that exists in more than one category."""
+
+
+def _keys_named(values: list[str], keys) -> set[tuple[str, str]]:
+    """`--id` values as (category, id) keys; `category/id` names one exactly."""
+    out: set[tuple[str, str]] = set()
+    for value in values:
+        category, sep, keystone_id = value.rpartition("/")
+        if sep:
+            out.add((category, keystone_id))
+            continue
+        matches = sorted({key for key in keys if key[1] == value})
+        if len(matches) > 1:
+            raise AmbiguousId(
+                f"id '{value}' exists in categories "
+                f"{', '.join(c for c, _ in matches)}; say which with "
+                f"--id {matches[0][0]}/{value}"
+            )
+        out.update(matches)
+    return out
+
+
 def cmd_fix(args, cfg: Config) -> int:
     resolved, _, findings, _ = scan(cfg, None)
     if findings:
         _report(findings, "plain")
         return 1
 
-    entries = {entry.id: entry for entry in _entries(cfg)}
+    entries = {entry.key: entry for entry in _entries(cfg)}
+    try:
+        selected = _keys_named(args.id, entries) if args.id else None
+    except AmbiguousId as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
     author = _git_author(cfg.repo_root)
     today = datetime.date.today().isoformat()
     changed: list[str] = []
     failed = False
 
     for item in resolved:
-        entry = entries.get(item.marker.id)
-        if entry is None or (args.id and entry.id not in args.id):
+        entry = entries.get(item.marker.key)
+        if entry is None or (selected is not None and entry.key not in selected):
             continue
         src = (cfg.repo_root / item.marker.path).read_text()
         try:
@@ -221,7 +249,13 @@ def _adopt(args, cfg: Config) -> int:
         _report(findings, "plain")
         return 1
 
-    match = [item for item in resolved if item.marker.id == args.id]
+    wanted_category, _, keystone_id = args.id.rpartition("/")
+    match = [
+        item
+        for item in resolved
+        if item.marker.id == keystone_id
+        and wanted_category in ("", item.marker.category)
+    ]
     if not match:
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
@@ -229,18 +263,30 @@ def _adopt(args, cfg: Config) -> int:
             file=sys.stderr,
         )
         return 1
+    categories = sorted({m.marker.category for m in match})
+    if len(categories) > 1:
+        print(
+            f"keystones: id '{keystone_id}' is marked in categories "
+            f"{', '.join(categories)}; say which with "
+            f"--id {categories[0]}/{keystone_id}",
+            file=sys.stderr,
+        )
+        return 1
     if len(match) > 1:
         where = ", ".join(f"{m.marker.path}:{m.marker.lineno}" for m in match)
         print(
-            f"keystones: id '{args.id}' appears more than once: {where}",
+            f"keystones: id '{keystone_id}' appears more than once: {where}",
             file=sys.stderr,
         )
         return 1
 
     item = match[0]
     category = item.marker.category
-    if cfg.sidecar_path(category, args.id).exists():
-        print(f"keystones: '{args.id}' already exists in {category}", file=sys.stderr)
+    if cfg.sidecar_path(category, keystone_id).exists():
+        print(
+            f"keystones: '{keystone_id}' already exists in {category}",
+            file=sys.stderr,
+        )
         return 1
 
     src = (cfg.repo_root / item.marker.path).read_text()
@@ -256,7 +302,7 @@ def _adopt(args, cfg: Config) -> int:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
     entry = Entry(
-        id=args.id,
+        id=keystone_id,
         category=category,
         target=str(item.target),
         hash=item.adapter.kind_for_path(item.marker.path),
@@ -274,9 +320,9 @@ def _adopt(args, cfg: Config) -> int:
             f"{_git_author(cfg.repo_root)}"
         ],
     )
-    sidecar.write(cfg.sidecar_path(category, args.id), entry)
+    sidecar.write(cfg.sidecar_path(category, keystone_id), entry)
     _write_index(cfg)
-    print(f"keystones: adopted '{args.id}' on {item.target}")
+    print(f"keystones: adopted '{keystone_id}' on {item.target}")
     return 0
 
 
@@ -307,12 +353,12 @@ def _complete_pending(args, cfg: Config) -> int:
         )
         return 1
 
-    taken = {item.marker.id for item in resolved} | {e.id for e in _entries(cfg)}
+    taken = {item.marker.key for item in resolved} | {e.key for e in _entries(cfg)}
 
     def check_id(value: str) -> str | None:
         if not marker_grammar.ID_RE.match(value):
             return "use letters, digits, dot, dash or underscore"
-        return f"'{value}' is already a keystone" if value in taken else None
+        return None
 
     def check_category(value: str) -> str | None:
         return None if value in cfg.categories else f"unknown category '{value}'"
@@ -356,6 +402,13 @@ def _complete_pending(args, cfg: Config) -> int:
                 if len(cfg.categories) > 1
                 else "default"
             )
+            # Ids are unique per category, so this can only be told once both are in.
+            while (category, marker_id) in taken:
+                print(
+                    f"  '{marker_id}' is already a keystone in {category}",
+                    file=sys.stderr,
+                )
+                marker_id = _ask("id", check_id)
             message = _ask("why is it load-bearing", check_reason)
             review_every = _ask(
                 "review every, e.g. 180d (blank for none)", check_duration
@@ -374,7 +427,7 @@ def _complete_pending(args, cfg: Config) -> int:
         path.write_bytes("".join(lines).encode("utf-8"))
         status = _adopt(
             argparse.Namespace(
-                id=marker_id,
+                id=f"{category}/{marker_id}",
                 message=message,
                 review_every=review_every or None,
                 depends=depends.replace(",", " ").split(),
@@ -385,7 +438,7 @@ def _complete_pending(args, cfg: Config) -> int:
             # Leave no marker behind without a sidecar to go with it.
             path.write_bytes(original)
             return status
-        taken.add(marker_id)
+        taken.add((category, marker_id))
     return 0
 
 

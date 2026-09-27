@@ -30,14 +30,14 @@ class Outcome:
 
 def _target_of(resolved: list[Resolved], entry: Entry) -> Resolved | None:
     for item in resolved:
-        if item.marker.id == entry.id:
+        if item.marker.key == entry.key:
             return item
     return None
 
 
 def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Outcome]:
     outcomes: list[Outcome] = []
-    for entry in sorted(entries, key=lambda e: e.id):
+    for entry in sorted(entries, key=lambda e: (e.id, e.category)):
         rel = entry.target.split("::")[0].split("#")[0]
         if adapters.needs_extra(rel):
             continue

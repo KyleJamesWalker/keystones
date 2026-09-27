@@ -30,7 +30,7 @@ def _comments(src: str) -> list[tuple[int, str]]:
     return [(t.start[0], t.string) for t in _tokens(src) if t.type == tokenize.COMMENT]
 
 
-def _regions(path: str, src: str) -> dict[str, tuple[int, int]]:
+def _regions(path: str, src: str) -> dict[tuple[str, str], tuple[int, int]]:
     return marker_grammar.scan_lines(path, src, _comments(src))[1]
 
 
@@ -105,9 +105,9 @@ def _definitions(tree: ast.Module) -> list[tuple[str, ast.AST]]:
 def resolve(src: str, marker: Marker) -> Target:
     if marker.scope is Scope.REGION:
         regions = _regions(marker.path, src)
-        if marker.id not in regions:
+        if marker.key not in regions:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is unbalanced")
-        start, end = regions[marker.id]
+        start, end = regions[marker.key]
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)
