@@ -546,6 +546,26 @@ def _complete_pending(args, cfg: Config) -> int:
     return 0
 
 
+def _marker_on(adapter, rel: str, src: str, target, scope: Scope):
+    """The marker already sitting on this target, so `add` adopts, not doubles."""
+    try:
+        found = adapters.for_path(rel).markers(rel, src)
+    except Exception:
+        return None
+    for marker in found:
+        if marker.scope is not scope:
+            continue
+        if scope is Scope.FILE:
+            return marker
+        try:
+            resolved = adapter.resolve(src, marker)
+        except (ResolutionError, SyntaxError):
+            continue
+        if resolved.qualname == target.qualname:
+            return marker
+    return None
+
+
 def _file_scope_insert_line(src: str) -> int:
     """First line a comment may go on without breaking the file.
 
@@ -627,6 +647,22 @@ def cmd_add(args, cfg: Config) -> int:
         first = src.splitlines()[target.start - 1]
         insert_at = target.start
         indent = first[: len(first) - len(first.lstrip())]
+
+    existing = _marker_on(adapter, rel, src, target, scope)
+    if existing is not None:
+        if existing.key != (args.category, args.id):
+            print(
+                f"keystones: {rel}::{qualname or ''} already carries keystone "
+                f"'{existing.id}'; run `keystones add --id "
+                f"{existing.category}/{existing.id}` to adopt it, or remove "
+                "that marker first.",
+                file=sys.stderr,
+            )
+            return 1
+        return _adopt(
+            argparse.Namespace(**{**vars(args), "id": f"{args.category}/{args.id}"}),
+            cfg,
+        )
 
     try:
         # Resolved before the file is touched: an unresolvable spec used to
