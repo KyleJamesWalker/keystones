@@ -147,6 +147,8 @@ class Config:
     include: tuple[str, ...] = ()
     # A file larger than this is never read; a keystone in one is reported.
     max_scan_bytes: int = 2_000_000
+    # The keys that name a YAML list item, in order of preference.
+    yaml_selector_keys: tuple[str, ...] = ("name", "id", "key")
 
     @property
     def sidecar_root(self) -> Path:
@@ -510,7 +512,7 @@ def load(repo_root: Path | None = None) -> Config:
         raise ConfigError(
             "tool.keystones.disabling_decorators must be a list of dotted names"
         )
-    for key in ("unreviewed", "include"):
+    for key in ("unreviewed", "include", "yaml_selector_keys"):
         value = data.get(key, [])
         if not isinstance(value, list) or not all(
             isinstance(v, str) and v for v in value
@@ -532,4 +534,5 @@ def load(repo_root: Path | None = None) -> Config:
         unreviewed=tuple(data.get("unreviewed", [])),
         include=tuple(data.get("include", [])),
         max_scan_bytes=cap,
+        yaml_selector_keys=tuple(data.get("yaml_selector_keys", ("name", "id", "key"))),
     )

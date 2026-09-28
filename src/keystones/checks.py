@@ -150,6 +150,16 @@ def c3_c4_hashes(
             f'run `keystones fix --id {ref(entry.key, shared)} -m "<why it changed>"`'
         )
 
+        # An entry may name its target by an alias, such as an explicit YAML
+        # `[key=value]` selector, that resolves to the same node.
+        if (
+            target != entry.target
+            and "::" in entry.target
+            and hasattr(item.adapter, "aliases")
+        ):
+            wanted = entry.target.split("::", 1)[1]
+            if wanted in item.adapter.aliases(src, item.target.qualname):
+                target = entry.target
         # A region is found by its marker, so a range that shifted under an
         # unrelated edit above it is not a different target.
         shifted = (
@@ -825,7 +835,16 @@ def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
             continue
         checked.add(item.marker.path)
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
-        for qualname in sorted(item.adapter.duplicate_qualnames(item.marker.path, src)):
+        targets = {
+            i.target.qualname
+            for i in resolved
+            if i.marker.path == item.marker.path and i.target.qualname
+        }
+        try:
+            dupes = item.adapter.duplicate_qualnames(item.marker.path, src, targets)
+        except TypeError:
+            dupes = item.adapter.duplicate_qualnames(item.marker.path, src)
+        for qualname in sorted(dupes):
             out.append(
                 Finding(
                     "C6",

@@ -52,6 +52,7 @@ def configure(cfg) -> None:
     _DEFAULT_KIND = {
         ext: lang.hash for lang in cfg.languages if lang.hash for ext in lang.extensions
     }
+    structured.configure(getattr(cfg, "yaml_selector_keys", None))
     _CACHE = None
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -680,7 +681,11 @@ def cmd_add(args, cfg: Config) -> int:
         target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
         insert_at, indent = _file_scope_insert_line(src), ""
     else:
-        target = adapter.target_for_qualname(rel, src, qualname)
+        try:
+            target = adapter.target_for_qualname(rel, src, qualname)
+        except (ResolutionError, SyntaxError) as exc:
+            print(f"keystones: {exc}", file=sys.stderr)
+            return 1
         if target is None:
             print(f"keystones: {qualname} not found in {rel}", file=sys.stderr)
             return 1
@@ -750,8 +755,10 @@ def cmd_add(args, cfg: Config) -> int:
             )
             return 1
         # The marker's own name for the target is what check resolves to, so
-        # an alias such as a list index is recorded under its stable selector.
-        new_target = landed
+        # an index is recorded under its stable selector. An explicit
+        # `[key=value]` the caller chose is kept; check accepts it as an alias.
+        if not re.search(r"\[[^\]=]+=[^\]]*\]$", qualname):
+            new_target = landed
     try:
         semantic, text = adapter.hashes(new_src, new_target)
     except ResolutionError as exc:

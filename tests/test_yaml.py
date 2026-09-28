@@ -318,3 +318,84 @@ def test_a_block_scalar_node_passes_c5_right_after_add(repo, run_cli, capsys, st
     )
     assert run_cli("add", "--id", "spec", "-m", "why.") == 0
     assert check(run_cli, capsys) == (0, "")
+
+
+# --- selectors: scope, duplicates, configurable keys -------------------------
+
+K8S = """a:
+  # keystone(hash=yaml): pick
+  - name: x
+    v: 1
+b:
+  - name: dup
+  - name: dup
+"""
+
+
+@needs_yaml
+def test_duplicate_names_in_an_unrelated_list_are_not_c6(repo, run_cli, capsys):
+    (repo / "k.yaml").write_text(K8S)
+    assert run_cli("add", "--id", "pick", "-m", "why.") == 0
+    assert check(run_cli, capsys) == (0, "")
+
+
+@needs_yaml
+def test_a_duplicate_in_the_keystoned_list_is_c6(repo, run_cli, capsys):
+    (repo / "k.yaml").write_text(K8S.replace("    v: 1\n", "    v: 1\n  - name: x\n"))
+    assert run_cli("add", "--id", "pick", "-m", "why.") == 1
+    err = capsys.readouterr().err
+    assert "more than once" in err and "a[0]" in err
+    assert "Traceback" not in err
+
+
+@needs_yaml
+def test_add_on_an_ambiguous_selector_refuses_cleanly(repo, run_cli, capsys):
+    (repo / "k.yaml").write_text(K8S.replace("  # keystone(hash=yaml): pick\n", ""))
+    args = ("add", "k.yaml::b[name=dup]", "--id", "d", "--hash", "yaml", "-m", "w")
+    assert run_cli(*args) == 1
+    err = capsys.readouterr().err
+    assert "more than once" in err and "b[0]" in err
+
+
+@needs_yaml
+def test_documents_are_separate_namespaces(repo, run_cli, capsys):
+    (repo / "m.yaml").write_text(
+        "spec:\n  replicas: 1\n---\nspec:\n  # keystone(hash=yaml): second\n"
+        "  replicas: 2\n"
+    )
+    assert run_cli("add", "--id", "second", "-m", "why.") == 0
+    sidecar = (repo / "keystones" / "default" / "second.md").read_text()
+    assert 'target = "m.yaml::doc[1].spec.replicas"' in sidecar
+    assert check(run_cli, capsys) == (0, "")
+    path = repo / "m.yaml"
+    path.write_text(path.read_text().replace("replicas: 2", "replicas: 3"))
+    assert check(run_cli, capsys)[0] == 1
+
+
+@needs_yaml
+def test_selector_keys_are_configurable(repo, run_cli):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + 'yaml_selector_keys = ["slug"]\n')
+    (repo / "s.yaml").write_text(
+        "items:\n  - slug: a\n    v: 1\n  # keystone(hash=yaml): b\n"
+        "  - slug: b\n    v: 2\n"
+    )
+    assert run_cli("add", "--id", "b", "-m", "why.") == 0
+    assert (
+        'target = "s.yaml::items[slug=b]"'
+        in (repo / "keystones" / "default" / "b.md").read_text()
+    )
+
+
+@needs_yaml
+def test_an_explicit_selector_may_use_any_scalar_key(repo, run_cli):
+    (repo / "s.yaml").write_text(
+        "items:\n  - code: z\n    v: 1\n  - code: y\n    v: 2\n"
+    )
+    args = ("add", "s.yaml::items[code=y]", "--id", "y", "--hash", "yaml", "-m", "w")
+    assert run_cli(*args) == 0
+    assert (
+        'target = "s.yaml::items[code=y]"'
+        in (repo / "keystones" / "default" / "y.md").read_text()
+    )
+    assert run_cli("check", "--all", "--no-base") == 0

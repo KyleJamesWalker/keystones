@@ -12,6 +12,7 @@ already gating YAML on text moves only when it asks to.
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from functools import cache
 
@@ -113,20 +114,34 @@ def _end_line(node, lines: list[str]) -> int:
 
 # A list item is named by one of these keys when it has one, so inserting or
 # reordering items does not move the keystone. Otherwise by its index.
-ITEM_KEYS = ("name", "id", "key")
+# `[tool.keystones] yaml_selector_keys` replaces the list.
+DEFAULT_ITEM_KEYS = ("name", "id", "key")
+ITEM_KEYS: tuple[str, ...] = DEFAULT_ITEM_KEYS
+
+_SELECTOR = re.compile(r"^(?P<prefix>.*)\[(?P<key>[^\]=]+)=(?P<value>[^\]]*)\]$")
+
+
+def configure(selector_keys: tuple[str, ...] | None) -> None:
+    global ITEM_KEYS
+    ITEM_KEYS = tuple(selector_keys) if selector_keys else DEFAULT_ITEM_KEYS
+
+
+def _scalars(item) -> dict[str, str]:
+    yaml = _yaml()
+    if not isinstance(item, yaml.MappingNode):
+        return {}
+    return {
+        k.value: v.value
+        for k, v in item.value
+        if isinstance(k, yaml.ScalarNode) and isinstance(v, yaml.ScalarNode)
+    }
 
 
 def _item_selector(item, index: int) -> str:
-    yaml = _yaml()
-    if isinstance(item, yaml.MappingNode):
-        scalars = {
-            k.value: v.value
-            for k, v in item.value
-            if isinstance(k, yaml.ScalarNode) and isinstance(v, yaml.ScalarNode)
-        }
-        for key in ITEM_KEYS:
-            if key in scalars:
-                return f"[{key}={scalars[key]}]"
+    scalars = _scalars(item)
+    for key in ITEM_KEYS:
+        if key in scalars:
+            return f"[{key}={scalars[key]}]"
     return f"[{index}]"
 
 
@@ -159,17 +174,37 @@ def _keys(src: str) -> list[tuple[str, object, int, int]]:
                     out.append((f"{prefix}[{index}]", item, *span))
                 walk(item, qualname)
 
-    for document in _documents(src):
-        walk(document, "")
+    documents = _documents(src)
+    for index, document in enumerate(documents):
+        # A second document is its own namespace, so `---` files keep working.
+        walk(document, f"doc[{index}]" if len(documents) > 1 else "")
     return out
+
+
+def _by_explicit_selector(src: str, qualname: str):
+    """`items[code=y]` for a key outside ITEM_KEYS, matched on the items' scalars."""
+    match = _SELECTOR.match(qualname)
+    if match is None:
+        return []
+    prefix, key, value = match.group("prefix"), match.group("key"), match.group("value")
+    found = []
+    for name, node, start, end in _keys(src):
+        is_item = name.startswith(f"{prefix}[") and name.endswith("]")
+        if is_item and _scalars(node).get(key) == value and name != qualname:
+            found.append((qualname, node, start, end))
+    return found
 
 
 def _key_for(src: str, qualname: str, path: str):
     matches = [k for k in _keys(src) if k[0] == qualname]
+    if not matches:
+        matches = _by_explicit_selector(src, qualname)
     if len(matches) > 1:
+        prefix = qualname.rsplit("[", 1)[0] if "[" in qualname else qualname
         raise ResolutionError(
             f"{path}: {qualname} is defined more than once, so a keystone on it "
-            "cannot say which one it protects"
+            f"cannot say which one it protects. Name the item by index instead, "
+            f"{prefix}[0], {prefix}[1], ..."
         )
     return matches[0] if matches else None
 
@@ -273,12 +308,17 @@ def hash_stored_source(source: str, target: str) -> str:
 
 
 def aliases(src: str, qualname: str) -> set[str]:
-    """Every name for the node `qualname` names: a keyed item and its index."""
+    """Every name for the node `qualname` names: a keyed item, its index, and
+    an explicit `[key=value]` for any of its scalar pairs."""
     keys = _keys(src)
     nodes = [node for name, node, *_ in keys if name == qualname]
     if len(nodes) != 1:
         return {qualname}
-    return {name for name, node, *_ in keys if node is nodes[0]}
+    names = {name for name, node, *_ in keys if node is nodes[0]}
+    if "[" in qualname and qualname.endswith("]"):
+        prefix = qualname.rsplit("[", 1)[0]
+        names |= {f"{prefix}[{k}={v}]" for k, v in _scalars(nodes[0]).items()}
+    return names
 
 
 def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
@@ -286,11 +326,22 @@ def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
     return None if found is None else canonical(_construct(found[1]))
 
 
-def duplicate_qualnames(path: str, src: str) -> set[str]:
+def duplicate_qualnames(
+    path: str, src: str, targets: set[str] | None = None
+) -> set[str]:
+    """Duplicates that can put a decoy under a keystone: the targets themselves
+    and the lists or keys above them. A repeated `name` in an unrelated list is
+    ordinary YAML and none of a keystone's business."""
     seen: set[str] = set()
     dupes: set[str] = set()
     for qualname, *_ in _keys(src):
         if qualname in seen:
             dupes.add(qualname)
         seen.add(qualname)
-    return dupes
+    if targets is None:
+        return dupes
+    return {
+        d
+        for d in dupes
+        if any(t == d or t.startswith((f"{d}.", f"{d}[")) for t in targets)
+    }
