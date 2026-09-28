@@ -162,13 +162,16 @@ def c3_c4_hashes(
                 target = entry.target
         # A region is found by its marker, so a range that shifted under an
         # unrelated edit above it is not a different target.
-        shifted = (
+        same_region = (
             item.target.region
             and entry.target.split("#")[0] == item.marker.path
             and "#L" in entry.target
             and target != entry.target
-            and semantic == entry.semantic
         )
+        shifted = same_region and semantic == entry.semantic
+        if same_region and not shifted:
+            # A body edit is the cause; the range moving with it is incidental.
+            target = entry.target
         if shifted and text == entry.text:
             out.append(
                 Finding(

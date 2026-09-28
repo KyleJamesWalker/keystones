@@ -279,3 +279,14 @@ def test_the_staged_hook_stays_quiet_on_a_pure_move(infra, run_cli, capsys):
     capsys.readouterr()
     assert run_cli("check", "--warn-only", "net.yaml") == 0
     assert "error" not in capsys.readouterr().err
+
+
+def test_a_moved_region_whose_body_changed_says_changed(infra, run_cli, capsys):
+    """The cause is the body edit; the shift is incidental."""
+    edit_config(infra, "apiVersion: v1", "# added\napiVersion: v1")
+    edit_config(infra, "exportRoutes: true", "exportRoutes: false")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C3] keystone 'vpc-peering-cidrs' changed" in err
+    assert "no longer covers" not in err
