@@ -33,18 +33,32 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/KyleJamesWalker/keystones
-    rev: v0.4.0
+    rev: v0.5.0
     hooks:
       - id: keystones          # staged text files, warns on drift
       - id: keystones-all      # whole repo, blocking
         additional_dependencies: ["tree-sitter-language-pack==1.20.0"]
 ```
 
+A hook installs from the pinned `rev`, which pre-commit fetches without tags,
+so the package carries a static version that the release tag must match; a
+plugin in `additional_dependencies` resolves against it. Until you are on a
+release that carries one, a `repo: local` hook running `keystones` from your
+own environment is the supported route for plugins.
+
 **Pin the grammar pack in your own config, not via this package.** The hooks run
 in an environment pre-commit builds for them, so `additional_dependencies` fixes
 the grammar version for your repo without colliding with anything your project
 itself depends on, and without waiting for a keystones release to move it. The
 package declares a range; your repo decides the version.
+
+`keystones-all` runs on the pre-push and manual stages, so a plain
+`pre-commit run --all-files` skips it and exits 0. CI must run
+`pre-commit run keystones-all --hook-stage manual --all-files`, or call
+`keystones check --all` directly. A repo gating YAML with `hash=yaml` adds
+`pyyaml` to the hook's `additional_dependencies`, or the `keystones[yaml]`
+extra; without it the YAML keystones read as orphans instead of failing with
+an install hint.
 
 The staged hook runs on every staged text file, whatever the language: a file
 with no marker in it costs one read and prints nothing, and a staged sidecar is
@@ -150,9 +164,15 @@ unittest skips are built in; add your own by dotted name:
 disabling_decorators = ["acme.testing.quarantine"]
 ```
 
+C16 sees what is in the test's own file: marks with their arguments, a
+module-level alias of a mark, a module-level `pytest.skip(...)`, and
+`__test__ = False`. It does not see `collect_ignore` in a `conftest.py` or a
+`--deselect` in `pytest.ini`, which switch a test off from another file.
+
 Some paths are rewritten by a bot with no pull request, a GitOps mirror or a
 monitor backup, and a keystone there can only fail. List them and `add` refuses
-the path, while a marker or entry already under it is [C18]:
+the path, an entry targeting it is [C18], and a marker the bot copied there is
+noted and ignored rather than gated:
 
 ```toml
 [tool.keystones]
@@ -176,7 +196,9 @@ exclude = ["**/generated/**"]
 `.git`, `node_modules`, `vendor` and `generated` directories, lockfiles such as
 `package-lock.json` and `uv.lock`, and minified assets are never scanned, so a
 dependency bump costs the staged hook nothing. `include = ["uv.lock"]` opts a
-generated file back in.
+generated file back in. A file over `max_scan_bytes` (2 MB by default) is never
+read either; `add` refuses one, and a keystone whose file grew past the cap is
+reported rather than passed unread.
 
 One sidecar file per keystone, inside a per-category directory, so each category
 gets its own reviewers and two concurrent changes can never conflict:
@@ -286,6 +308,12 @@ reformat-immune.
 Whole-line comments inside a region are kept out of the semantic hash where the
 file type's comment leader is known, so editing one is [C4] and clears with a
 `fix` and no note. A type keystones cannot name a leader for hashes every line.
+A trailing comment on a code line is part of that line, so editing it is [C3].
+
+A region is found by its marker, not by the line range the sidecar records. An
+edit above it that shifts the range with the body unchanged passes with a
+notice, and `fix` records the new range without a note. A new comment line
+inside the region shifts the range and is [C4].
 
 ### YAML by meaning
 
@@ -371,7 +399,7 @@ move that file's hash basis and report drift on code nobody touched.
 ```toml
 target = "models/revenue.sql#L5-L5"
 hash   = "text"
-hasher = "keystones-text/2"
+hasher = "keystones-text/3"
 ```
 
 `hash` is the choice a person made and does not move. `hasher` is the exact
@@ -428,7 +456,7 @@ a plugin is in play; `hasher` carries both:
 
 ```toml
 hash = "dbt"
-hasher = "keystones-ts/2+sql_bigquery@1.20.0/a1b2c3d4e5f6+dbt/1"
+hasher = "keystones-ts/3+sql_bigquery@1.20.0/a1b2c3d4e5f6+dbt/1"
 ```
 
 Masked content is hashed verbatim, so a template expression is not a hole in
@@ -508,7 +536,7 @@ a pin. Each entry's hasher id records the grammar version and a digest of the
 language spec that produced the hash:
 
 ```
-keystones-ts/2+typescript@1.20.0/4957071ba1a6
+keystones-ts/3+typescript@1.20.0/4957071ba1a6
 ```
 
 That, not the install requirement, is what makes hashes deterministic. The spec
@@ -520,6 +548,10 @@ the hash is recomputed first: if it still reproduces, the grammar emits the same
 thing and nothing is said. Only when the two genuinely disagree does it surface,
 and then as a hasher mismatch rather than as code drift, because from there it
 is not possible to tell a moved basis from changed code.
+
+`keystones list --unparseable` prints every file a parser claims but cannot
+read, with the parser's first error, marker or not. Run it before adopting a
+repo to see which spellings to shape, or which files want `hash=text`.
 
 `keystones fix` refuses to write from an environment whose hasher differs from
 the one an entry records. Without that, running `fix` with the wrong grammar
@@ -542,6 +574,46 @@ parentheses, arrow-parameter parens, and a trailing separator. Operators and
 interior separators are kept, so `a + b` and `a - b` differ, and so do `[a,,b]`
 and `[a,b]`. The `export` keyword and a `const`/`let`/`var` binding are inside
 the hash, so un-exporting a symbol is a change.
+
+### Upgrading
+
+Every release that moves a hasher, and 0.5.0 moves four, needs one
+`keystones migrate` per repo after upgrading. It rewrites each entry whose
+recorded hasher differs from the installed one, proving the move from the
+stored source, and records the current hasher id. A recorded id that differs
+while the hashes still agree passes `check` silently by design; `migrate` is
+what refreshes it, so put `keystones migrate --check` next to `check --all` in
+CI to see drift in recorded ids before it matters.
+
+An entry adopted while its hasher had a known C5-at-birth bug, such as
+`hash=yaml` on a file with no final newline before 0.5.0, may read C3 once
+after upgrading where `migrate` cannot prove it from a stored source that was
+wrong to begin with. `keystones fix -m` clears it; the owner reviews the diff.
+
+Adding `[tool.keystones]` to a Poetry project's `pyproject.toml` changes the
+file Poetry's lock hash covers, so stage the refreshed lockfile in the same
+commit or a lockfile-consistency hook will refuse it.
+
+### What a hash does not see
+
+- A Python docstring is part of the AST, so editing one is C3.
+- Test data held in a module-level name, `@pytest.mark.parametrize("x", CASES)`
+  with `CASES` defined above, sits outside the test's hash. Name it in
+  `depends` (`tests/test_x.py::CASES`).
+- A guard used through a module-level instance (`guard = Guard()`) is keystoned
+  on its definition; rebinding the instance passes. Keystone the binding too.
+- SQL function-name case is inside the hash (`COALESCE` and `coalesce`
+  differ). Quoted identifiers are always exact.
+- A twin is compared on the whole semantic hash, docstrings included, and a CTE
+  twin must keep the same CTE name because the rendering includes `name AS`.
+- A dependent's sidecar stores no dependency source; its diff shows only
+  `depends_hash` moving.
+- Removing a twin or a dependency from a sidecar is an edit to that sidecar,
+  which CODEOWNERS already puts in front of the owner.
+
+One extension has one language table repo-wide, so a repo holding two SQL
+dialects side by side picks one grammar for `.sql`; a second extension, such as
+`.bqsql`, takes the other.
 
 ## Status
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.adapters.masking import preprocessed
 from keystones.config import ParserPlugin, Preprocessor, options_digest
 from keystones.hashing import digest
@@ -65,7 +65,7 @@ def _tree(spec: PluginSpec, src: str, fragment: bool = False):
     try:
         return parse(masked)
     except Unparseable as exc:
-        raise ResolutionError(f"does not parse as {spec.parser.name}: {exc}") from exc
+        raise ParseFailure(f"does not parse as {spec.parser.name}: {exc}") from exc
 
 
 def _comment_lines(tree) -> list[tuple[int, str]]:
@@ -193,14 +193,24 @@ def kind_for_path(path: str) -> str:
     return spec.preprocessor.name if spec.preprocessor else spec.parser.name
 
 
-def duplicate_qualnames(path: str, src: str) -> set[str]:
+def duplicate_qualnames(
+    path: str, src: str, targets: set[str] | None = None
+) -> set[str]:
+    """Duplicates that matter: the targets and the definitions above them.
+    Under a duplicated block every child repeats too; one report is enough."""
     seen: set[str] = set()
     dupes: set[str] = set()
     for d in _tree(spec_for(path), src).definitions():
         if d.qualname in seen:
             dupes.add(d.qualname)
         seen.add(d.qualname)
-    return dupes
+    if targets is None:
+        return dupes
+    return {
+        d
+        for d in dupes
+        if any(t == d or t.startswith((f"{d}.", f"{d}[")) for t in targets)
+    }
 
 
 def comment_prefix(path: str) -> str:

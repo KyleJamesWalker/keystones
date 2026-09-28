@@ -52,6 +52,7 @@ def configure(cfg) -> None:
     _DEFAULT_KIND = {
         ext: lang.hash for lang in cfg.languages if lang.hash for ext in lang.extensions
     }
+    structured.configure(getattr(cfg, "yaml_selector_keys", None))
     _CACHE = None
 
 
@@ -140,18 +141,29 @@ def for_symbols(path: str):
     return fallback
 
 
-def hasher_id(adapter, target) -> str:
-    """The hasher an entry records. A region is text whatever its file's parser.
+def _region_as_text(adapter, target) -> tuple[bool, str]:
+    """Whether this target is a region the text adapter hashes, and its path.
 
     `target` is a Target or the string an entry stores; `#L` marks a region.
+    An adapter that hashes its own regions says so with `hashes_regions`.
     """
     if isinstance(target, str):
         region, path = "#L" in target, target.split("::")[0].split("#")[0]
     else:
         region, path = target.region, target.path
-    if region:
-        return fallback.HASHER_ID
-    return adapter.hasher_id_for_path(path)
+    return region and not getattr(adapter, "hashes_regions", False), path
+
+
+def hasher_id(adapter, target) -> str:
+    """The hasher an entry records: the text hasher for a region hashed as text."""
+    as_text, path = _region_as_text(adapter, target)
+    return fallback.HASHER_ID if as_text else adapter.hasher_id_for_path(path)
+
+
+def kind_for(adapter, target) -> str:
+    """The basis an entry records, `text` for a region hashed as text."""
+    as_text, path = _region_as_text(adapter, target)
+    return TEXT_KIND if as_text else adapter.kind_for_path(path)
 
 
 def needs_extra(path: str) -> bool:

@@ -112,7 +112,7 @@ def c3_c4_hashes(
             continue
         # The basis is recorded in two places on purpose, so editing one and
         # not the other is caught instead of quietly re-gating the keystone.
-        actual_kind = item.adapter.kind_for_path(item.marker.path)
+        actual_kind = adapters.kind_for(item.adapter, item.target)
         if entry.hash and entry.hash != actual_kind:
             out.append(
                 Finding(
@@ -150,9 +150,54 @@ def c3_c4_hashes(
             f'run `keystones fix --id {ref(entry.key, shared)} -m "<why it changed>"`'
         )
 
+        # An entry may name its target by an alias, such as an explicit YAML
+        # `[key=value]` selector, that resolves to the same node.
+        if (
+            target != entry.target
+            and "::" in entry.target
+            and hasattr(item.adapter, "aliases")
+        ):
+            wanted = entry.target.split("::", 1)[1]
+            if wanted in item.adapter.aliases(src, item.target.qualname):
+                target = entry.target
+        # A region is found by its marker, so a range that shifted under an
+        # unrelated edit above it is not a different target.
+        same_region = (
+            item.target.region
+            and entry.target.split("#")[0] == item.marker.path
+            and "#L" in entry.target
+            and target != entry.target
+        )
+        shifted = same_region and semantic == entry.semantic
+        if same_region and not shifted:
+            # A body edit is the cause; the range moving with it is incidental.
+            target = entry.target
+        if shifted and text == entry.text:
+            out.append(
+                Finding(
+                    "C3",
+                    Severity.NOTICE,
+                    f"keystone '{entry.id}' moved from {entry.target} to {target} "
+                    "with its body unchanged; `keystones fix` records the new "
+                    "range and needs no note",
+                    item.marker.path,
+                    item.marker.lineno,
+                )
+            )
+        elif shifted:
+            out.append(
+                Finding(
+                    "C4",
+                    severity,
+                    f"comments inside keystone '{entry.id}' changed, and it now "
+                    f"spans {target}. {fix_hint}",
+                    item.marker.path,
+                    item.marker.lineno,
+                )
+            )
         # Without this the marker can be moved onto a hash-identical decoy while
         # the real definition is rewritten, and every other check stays green.
-        if target != entry.target:
+        elif target != entry.target:
             out.append(
                 Finding(
                     "C3",
@@ -213,6 +258,30 @@ def disablers(cfg: Config, adapter, src: str, target) -> list[str]:
     return find(src, target.qualname, cfg.disabling_decorators)
 
 
+def _disabled_change(added: list[str], removed: list[str]) -> str:
+    """One alias rebound reads as a change of alias, not as a skip appearing."""
+    pieces: list[str] = []
+    for new in list(added):
+        if " via " not in new:
+            continue
+        tail = new[new.index(" via ") :]
+        old = next((r for r in removed if r.endswith(tail)), None)
+        if old is None:
+            continue
+        alias = tail.split(" via ", 1)[1].split(" on ", 1)[0]
+        pieces.append(
+            f"decorator alias {alias} changed: {old[: -len(tail)]} -> "
+            f"{new[: -len(tail)]}"
+        )
+        added.remove(new)
+        removed.remove(old)
+    if added:
+        pieces.append(f"is switched off by {', '.join(added)}")
+    if removed:
+        pieces.append(f"is no longer switched off by {', '.join(removed)}")
+    return "; ".join(pieces)
+
+
 def c16_disabled(
     cfg: Config,
     resolved: list[Resolved],
@@ -236,11 +305,7 @@ def c16_disabled(
             continue
         added = [d for d in now if d not in entry.disabled_by]
         removed = [d for d in entry.disabled_by if d not in now]
-        what = (
-            f"is switched off by {', '.join(added)}"
-            if added
-            else f"is no longer switched off by {', '.join(removed)}"
-        )
+        what = _disabled_change(added, removed)
         out.append(
             Finding(
                 "C16",
@@ -267,25 +332,25 @@ def c18_unreviewed(
         if pattern is None:
             continue
         seen.add(item.marker.key)
+        # A bot copies marked files here; failing every run on the copy would
+        # only get the path excluded. The marker is noted, never gated.
         out.append(
             Finding(
                 "C18",
-                Severity.ERROR,
-                f"keystone '{item.marker.id}' is in {item.marker.path}, which "
-                f"'{pattern}' in [tool.keystones] unreviewed says is rewritten "
-                "without review, so no gate can hold there. Remove the marker "
-                "and its entry, or take the path off the list.",
+                Severity.NOTICE,
+                f"marker '{item.marker.id}' in {item.marker.path} is ignored: "
+                f"'{pattern}' in [tool.keystones] unreviewed says the path is "
+                "rewritten without review, so no gate holds there",
                 item.marker.path,
                 item.marker.lineno,
-                owner_hint=item.marker.category,
             )
         )
     if scoped:
         return out
-    for key, entry in sorted(entries.items()):
+    for _key, entry in sorted(entries.items()):
         rel = entry.target.split("::")[0].split("#")[0]
         pattern = cfg.unreviewed_by(rel)
-        if pattern is None or key in seen:
+        if pattern is None:
             continue
         out.append(
             Finding(
@@ -354,10 +419,20 @@ def hasher_difference(recorded: str, expected: str) -> str:
                     f"{e_match['version']} is installed. {_PIN}"
                 )
             if r_match["rest"] != e_match["rest"]:
-                what = "spec" if r_family == "keystones-ts" else "options"
-                notes.append(
-                    f"the {name} {what} in [[tool.keystones.language]] changed"
-                )
+                r_rest, e_rest = r_match["rest"].strip("/"), e_match["rest"].strip("/")
+                # An id written before a plugin versioned its rendering is render1.
+                if e_rest.startswith("render") and not r_rest.startswith("render"):
+                    r_rest = "render1"
+                if r_rest.startswith("render") and e_rest.startswith("render"):
+                    notes.append(
+                        f"{name}'s rendering moved from {r_rest} to {e_rest}; "
+                        "`keystones migrate` proves entries across"
+                    )
+                else:
+                    what = "spec" if r_family == "keystones-ts" else "options"
+                    notes.append(
+                        f"the {name} {what} in [[tool.keystones.language]] changed"
+                    )
             continue
         r_name, _, r_version = r_part.partition("/")
         e_name, _, e_version = e_part.partition("/")
@@ -366,6 +441,41 @@ def hasher_difference(recorded: str, expected: str) -> str:
         else:
             notes.append(f"{r_part or 'nothing'} became {e_part or 'nothing'}")
     return "; ".join(notes) or "the ids differ in a way keystones cannot name"
+
+
+def oversized(cfg: Config, entry_list: list[Entry]) -> tuple[list[Finding], set[str]]:
+    """Entries whose target file is over the cap: reported, and kept out of C2.
+
+    A keystoned target must never pass because nobody read it.
+    """
+    findings: list[Finding] = []
+    by_path: dict[str, list[Entry]] = {}
+    for entry in sorted(entry_list, key=lambda e: (e.category, e.id)):
+        rel = entry.target.split("::")[0].split("#")[0]
+        by_path.setdefault(rel, []).append(entry)
+    paths: set[str] = set()
+    for rel, entries in sorted(by_path.items()):
+        try:
+            size = (cfg.repo_root / rel).stat().st_size
+        except OSError:
+            continue
+        if size <= cfg.max_scan_bytes:
+            continue
+        paths.add(rel)
+        names = ", ".join(f"'{e.id}'" for e in entries)
+        findings.append(
+            Finding(
+                "size",
+                Severity.ERROR,
+                f"{rel} is {size} bytes, over max_scan_bytes "
+                f"({cfg.max_scan_bytes}), so keystone(s) {names} in it were not "
+                "checked. Raise [tool.keystones] max_scan_bytes, or move them to "
+                "a smaller file.",
+                rel,
+                owner_hint=entries[0].category,
+            )
+        )
+    return findings, paths
 
 
 def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
@@ -513,7 +623,8 @@ def run_all(
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
         findings += c6_shadowed_targets(cfg, resolved)
-        findings += c8_ownership(cfg)
+        used = {e.category for e in entry_list} | {i.marker.category for i in resolved}
+        findings += c8_ownership(cfg, used)
         findings += c11_dependencies(cfg, entry_list)
         findings += c17_twins(cfg, entry_list)
         findings += stale_report(cfg, entry_list)
@@ -547,7 +658,23 @@ def _ruleset_reviewers(cfg: Config) -> tuple[list, list[Finding]]:
     if not cfg.codeowners_from_rulesets:
         return [], []
     try:
-        return doctor.required_reviewers(cfg.repo_root), []
+        rules = doctor.required_reviewers(cfg.repo_root)
+        if rules:
+            return rules, []
+        try:
+            labels = doctor.rulesets_applying(cfg.repo_root)
+        except doctor.Unavailable:
+            labels = []
+        return [], [
+            Finding(
+                "C8",
+                Severity.NOTICE,
+                f"codeowners_from_rulesets is on: read {len(labels)} ruleset(s)"
+                + (": " + ", ".join(labels) if labels else "")
+                + f"; none has a required_reviewers pattern covering "
+                f"{cfg.root}/<category>/, so CODEOWNERS alone decides",
+            )
+        ]
     except doctor.Unavailable as exc:
         return [], [
             Finding(
@@ -576,8 +703,25 @@ def _covered_by_ruleset(
     return problem
 
 
-def c8_ownership(cfg: Config) -> list[Finding]:
-    """The gate is only real if its own files are owned. See keystones/codeowners.py."""
+def _shadowed(what: str, rule, hidden, owners_rel: str | None) -> Finding:
+    return Finding(
+        "C8",
+        Severity.ERROR,
+        f"{what} owned by '{rule.pattern}' (line {rule.lineno}), which comes "
+        f"later and overrides '{hidden.pattern}' (line {hidden.lineno}). "
+        "CODEOWNERS is last-match-wins, so the later rule silently took the "
+        "path from the owner the specific rule named; move it above",
+        owners_rel,
+        rule.lineno,
+    )
+
+
+def c8_ownership(cfg: Config, used: set[str] | None = None) -> list[Finding]:
+    """The gate is only real if its own files are owned. See keystones/codeowners.py.
+
+    A category named in config was meant to be owned. The implicit `default`
+    was not chosen by anyone, so it is probed only once a keystone uses it.
+    """
     from keystones import codeowners
 
     owners_file, rules = codeowners.find(cfg.repo_root)
@@ -608,7 +752,7 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         )
 
     for rel in gate_files:
-        rule = codeowners.owners_for(rules, rel)
+        rule, hidden = codeowners.shadowed(rules, rel)
         if rule is None or not rule.owners:
             findings.append(
                 _covered_by_ruleset(
@@ -623,10 +767,15 @@ def c8_ownership(cfg: Config) -> list[Finding]:
                     ),
                 )
             )
+        elif hidden is not None:
+            findings.append(_shadowed(f"{rel} is", rule, hidden, owners_rel))
 
     for category in cfg.categories:
+        implicit = category == "default" and cfg.implicit_default
+        if implicit and used is not None and category not in used:
+            continue
         probe = f"{cfg.root}/{category}/_probe.md"
-        rule = codeowners.owners_for(rules, probe)
+        rule, hidden = codeowners.shadowed(rules, probe)
         if rule is None or not rule.owners:
             problem = Finding(
                 "C8",
@@ -635,6 +784,8 @@ def c8_ownership(cfg: Config) -> list[Finding]:
                 "sidecars would require no review",
                 owners_rel,
             )
+        elif hidden is not None:
+            problem = _shadowed(f"category '{category}' is", rule, hidden, owners_rel)
         elif not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
             problem = Finding(
                 "C8",
@@ -667,7 +818,7 @@ def c17_twins(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
 def c11_dependencies(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
     from keystones import dependencies
 
-    return dependencies.check(cfg.repo_root, entry_list)
+    return dependencies.check(cfg.repo_root, entry_list, cfg.max_scan_bytes)
 
 
 def stale_report(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
@@ -699,37 +850,6 @@ def stale_report(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
     return findings
 
 
-def hasher_mismatch(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
-    """Reported on its own, never as C3.
-
-    A stored hash produced by a different serializer or grammar version says
-    nothing about whether the code changed, so failing it as drift would send
-    people to `fix` and rubber-stamp a real review.
-    """
-    from keystones import adapters
-
-    out = []
-    for entry in sorted(entry_list, key=lambda e: e.id):
-        rel = entry.target.split("::")[0].split("#")[0]
-        if adapters.needs_extra(rel):
-            continue
-        adapter = adapters.for_path(rel)
-        expected = adapters.hasher_id(adapter, entry.target)
-        if entry.hasher and entry.hasher != expected:
-            out.append(
-                Finding(
-                    "C13",
-                    Severity.ERROR,
-                    f"keystone '{entry.id}' was hashed by {entry.hasher} but this "
-                    f"install uses {expected}, so C3, C4 and C5 cannot verify "
-                    "it at all. Run `keystones migrate` to prove it across, or "
-                    "install the matching extra.",
-                    entry.path,
-                )
-            )
-    return out
-
-
 def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
     """A second definition of the same name lets a decoy sit under the marker.
 
@@ -743,7 +863,16 @@ def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
             continue
         checked.add(item.marker.path)
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
-        for qualname in sorted(item.adapter.duplicate_qualnames(item.marker.path, src)):
+        targets = {
+            i.target.qualname
+            for i in resolved
+            if i.marker.path == item.marker.path and i.target.qualname
+        }
+        try:
+            dupes = item.adapter.duplicate_qualnames(item.marker.path, src, targets)
+        except TypeError:
+            dupes = item.adapter.duplicate_qualnames(item.marker.path, src)
+        for qualname in sorted(dupes):
             out.append(
                 Finding(
                     "C6",

@@ -135,3 +135,38 @@ def test_list_and_index_commands(repo, run_cli):
     assert run_cli("list") == 0
     assert run_cli("list", "--category", "finance") == 0
     assert run_cli("index") == 0
+
+
+def test_a_syntax_error_in_a_keystoned_file_is_its_own_finding(repo, run_cli, capsys):
+    """An unclosed bracket used to surface as C2, which points at the sidecar."""
+    run_cli("add", "billing/payout.py::compute_payout", "--id", "p", "-m", "why.")
+    path = repo / "billing" / "payout.py"
+    path.write_text(path.read_text().replace('Decimal("0.01")', 'Decimal("0.01"'))
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "billing/payout.py:" in err and "[parse]" in err
+    assert "[C2]" not in err
+    capsys.readouterr()
+    assert run_cli("check", "billing/payout.py") == 1
+    assert "[parse]" in capsys.readouterr().err
+
+
+def test_history_separates_the_note_from_the_author(repo, run_cli):
+    add_keystone(run_cli)
+    edit(repo, "ROUND_HALF_UP", "ROUND_HALF_EVEN")
+    assert run_cli("fix", "-m", "banker rounding per policy.") == 0
+    text = (repo / "keystones" / "finance" / "payout-rounding.md").read_text()
+    assert "- banker rounding per policy. (Test User)" in text
+    assert "initial keystone (Test User)" in text
+
+
+def test_list_unparseable_names_each_file_with_its_first_error(repo, run_cli, capsys):
+    """The cheapest way to find the next spelling a grammar cannot read."""
+    (repo / "bad.py").write_text("def f(:\n    pass\n")
+    (repo / "good.py").write_text("def g():\n    return 1\n")
+    assert run_cli("list", "--unparseable") == 0
+    out = capsys.readouterr().out
+    assert "bad.py" in out and "line 1" in out
+    assert "good.py" not in out
+    assert "1 file(s)" in out

@@ -75,13 +75,13 @@ def test_a_marker_in_an_unparsed_type_is_checked(repo, run_cli, capsys, name):
 
 
 def test_the_staged_path_reads_only_what_it_is_given(gated, run_cli, monkeypatch):
-    from keystones import discovery, sidecar
+    """Sidecars are read for the reverse lookup; the source tree never is."""
+    from keystones import discovery
 
     def everything(*args, **kwargs):
         raise AssertionError("the staged path walked the whole repo")
 
     monkeypatch.setattr(discovery, "_tracked_files", everything)
-    monkeypatch.setattr(sidecar, "load_all", everything)
     (gated / "notes.txt").write_text("hi\n")
     assert run_cli("check", PAYOUT, SIDECAR, "notes.txt") == 0
 
@@ -90,3 +90,148 @@ def test_a_malformed_sidecar_the_target_needs_is_a_finding(gated, run_cli, capsy
     (gated / SIDECAR).write_text("# payout-rounding\n\nno toml block\n")
     assert run_cli("check", PAYOUT) == 1
     assert "error: [sidecar]" in capsys.readouterr().err
+
+
+# --- what the staged hook checks beyond the file --------------------------------
+
+
+def test_a_staged_keystones_twin_is_checked(repo, run_cli, capsys):
+    (repo / "copy.py").write_text(
+        "from decimal import ROUND_HALF_UP, Decimal\n\n\n"
+        "def compute_payout(amount: Decimal) -> Decimal:\n"
+        '    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)\n'
+    )
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "p",
+            "-m",
+            "w",
+            "--twin",
+            "copy.py::compute_payout",
+        )
+        == 0
+    )
+    (repo / "copy.py").write_text((repo / "copy.py").read_text().replace("0.01", "0.1"))
+    capsys.readouterr()
+    assert run_cli("check", PAYOUT) == 1
+    assert "[C17]" in capsys.readouterr().err
+
+
+def test_a_staged_keystones_dependency_is_checked(repo, run_cli, capsys):
+    (repo / "rates.py").write_text("BASE = 0.07\n")
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "p",
+            "-m",
+            "w",
+            "--depends",
+            "rates.py::BASE",
+        )
+        == 0
+    )
+    (repo / "rates.py").write_text("BASE = 0.09\n")
+    capsys.readouterr()
+    assert run_cli("check", PAYOUT) == 1
+    assert "[C11]" in capsys.readouterr().err
+
+
+def test_the_staged_summary_names_what_it_did_not_run(gated, run_cli, capsys):
+    assert run_cli("check", PAYOUT) == 0
+    out = capsys.readouterr().out
+    assert "1 keystone(s) verified" in out
+    assert "check --all" in out and "C9" in out
+
+
+def test_a_staged_file_that_is_someone_elses_twin_is_checked(repo, run_cli, capsys):
+    (repo / "copy.py").write_text(
+        "from decimal import ROUND_HALF_UP, Decimal\n\n\n"
+        "def compute_payout(amount: Decimal) -> Decimal:\n"
+        '    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)\n'
+    )
+    args = ("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w")
+    assert run_cli(*args, "--twin", "copy.py::compute_payout") == 0
+    (repo / "copy.py").write_text((repo / "copy.py").read_text().replace("0.01", "0.1"))
+    capsys.readouterr()
+    assert run_cli("check", "copy.py") == 1
+    assert "[C17]" in capsys.readouterr().err
+
+
+def test_a_staged_file_that_is_someone_elses_dependency_is_checked(
+    repo, run_cli, capsys
+):
+    (repo / "rates.py").write_text("BASE = 0.07\n")
+    args = ("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w")
+    assert run_cli(*args, "--depends", "rates.py::BASE") == 0
+    (repo / "rates.py").write_text("BASE = 0.09\n")
+    capsys.readouterr()
+    assert run_cli("check", "rates.py") == 1
+    assert "[C11]" in capsys.readouterr().err
+
+
+def test_a_path_that_does_not_exist_is_an_error(gated, run_cli, capsys):
+    """A typo in a hook's file list must not pass as clean."""
+    assert run_cli("check", "nope.py") == 1
+    assert "nope.py" in capsys.readouterr().err
+
+
+def test_a_clean_twin_only_path_says_what_it_verified(repo, run_cli, capsys):
+    (repo / "copy.py").write_text(
+        "from decimal import ROUND_HALF_UP, Decimal\n\n\n"
+        "def compute_payout(amount: Decimal) -> Decimal:\n"
+        '    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)\n'
+    )
+    args = ("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w")
+    assert run_cli(*args, "--twin", "copy.py::compute_payout") == 0
+    capsys.readouterr()
+    assert run_cli("check", "copy.py") == 0
+    assert "verified through twins or depends" in capsys.readouterr().out
+
+
+def test_a_directory_expands_to_the_tracked_files_under_it(gated, run_cli, capsys):
+    """`check billing` used to exit 0 in silence."""
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    assert run_cli("check", "billing") == 1
+    assert "[C3]" in capsys.readouterr().err
+
+
+def test_findings_are_not_repeated_across_staged_paths(gated, run_cli, capsys):
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    assert run_cli("check", PAYOUT, SIDECAR) == 1
+    assert capsys.readouterr().err.count("[C3]") == 1
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["./billing/payout.py", "billing/../billing/payout.py", "ABS", "./billing"],
+)
+def test_path_spellings_are_normalised(gated, run_cli, capsys, spelling):
+    """`check ./a.py` gave a false C3 on every marker; `check .` was silent."""
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    given = str(path) if spelling == "ABS" else spelling
+    assert run_cli("check", given) == 1
+    err = capsys.readouterr().err
+    assert "[C3] keystone 'payout-rounding' changed" in err
+    assert "no longer covers" not in err
+
+
+def test_the_repo_root_itself_is_every_tracked_file(gated, run_cli, capsys):
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    assert run_cli("check", ".") == 1
+    assert "[C3]" in capsys.readouterr().err
+
+
+def test_a_path_outside_the_repo_is_an_error(gated, run_cli, capsys, tmp_path):
+    outside = tmp_path.parent / "elsewhere.py"
+    outside.write_text("x = 1\n")
+    assert run_cli("check", str(outside)) == 1
+    assert "outside the repository" in capsys.readouterr().err

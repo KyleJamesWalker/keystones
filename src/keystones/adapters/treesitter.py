@@ -17,7 +17,7 @@ from functools import cache
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.adapters.masking import (  # noqa: F401
     ContractError,
     PreprocessorRefused,
@@ -27,14 +27,14 @@ from keystones.config import options_digest
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
-SERIALIZER_VERSION = 2
+SERIALIZER_VERSION = 3
 
 
 class Unavailable(Exception):
     """The `all` extra is not installed."""
 
 
-class ParseError(ResolutionError):
+class ParseError(ParseFailure):
     """The grammar could not read the file.
 
     Hashing an error-recovery tree is worse than refusing one. Recovery shape
@@ -298,11 +298,26 @@ def _parse(spec: LanguageSpec, src: str, strict: bool = True):
     src, _ = preprocessed(spec.preprocessor, src)
     tree = _parser(spec.language).parse(src.encode("utf-8"))
     if strict and tree.root_node.has_error:
+        where = _first_error(tree.root_node)
         raise ParseError(
-            f"does not parse as {spec.language}. A templating layer the grammar "
-            "cannot read (dbt Jinja, ERB) will do this."
+            f"does not parse as {spec.language}: {where}. Either the grammar "
+            "does not know this construct, or a templating layer it cannot read "
+            "(dbt Jinja, ERB) is in the way."
         )
     return tree
+
+
+def _first_error(root) -> str:
+    """The first error or missing node, as a line and the text around it."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            text = node.text.decode("utf-8", "replace").strip().split("\n")[0][:40]
+            near = f"near {text!r}" if text else "at a missing token"
+            return f"line {node.start_point[0] + 1}, {near}"
+        stack.extend(reversed([c for c in node.children if c.has_error]))
+    return "at an unknown position"
 
 
 # Separators a formatter adds or removes freely. Prettier writes a trailing
@@ -403,11 +418,23 @@ def _render(
         if spec is not None:
             return _normalise_leaf(node, spec)
         return f"{node.type}:{node.text.decode('utf-8', 'replace')!r}"
-    parts = [
-        rendered
-        for child in node.children
-        if (rendered := _render(child, comments, spec)) is not None
-    ]
+    # A node whose text is more than its children, such as BigQuery's
+    # `identifier` for `ds.events` with only the `.` as a child, would
+    # otherwise drop the names from the hash. The gaps are rendered as text.
+    parts: list[str] = []
+    text = node.text
+    cursor = node.start_byte
+    for child in node.children:
+        gap = text[cursor - node.start_byte : child.start_byte - node.start_byte]
+        if gap.strip():
+            parts.append(f"text:{gap.decode('utf-8', 'replace').strip()!r}")
+        rendered = _render(child, comments, spec)
+        if rendered is not None:
+            parts.append(rendered)
+        cursor = child.end_byte
+    tail = text[cursor - node.start_byte :]
+    if tail.strip():
+        parts.append(f"text:{tail.decode('utf-8', 'replace').strip()!r}")
     return f"{node.type}({','.join(parts)})"
 
 

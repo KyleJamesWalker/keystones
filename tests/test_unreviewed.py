@@ -23,16 +23,17 @@ def test_add_refuses_a_path_rewritten_without_review(gitops, run_cli, capsys):
     assert not (gitops / "keystones" / "default" / "app.md").exists()
 
 
-def test_a_marker_in_such_a_path_is_c18(gitops, run_cli, capsys):
-    assert run_cli("check", "--all", "--no-base") == 1
+def test_a_marker_in_such_a_path_is_noted_not_gated(gitops, run_cli, capsys):
+    """A bot copying a marked file into the mirror must not fail every run."""
+    assert run_cli("check", "--all", "--no-base") == 0
     err = capsys.readouterr().err
-    assert f"{MIRROR}:1: error: [C18]" in err
+    assert f"{MIRROR}:1: notice: [C18]" in err
     assert "[C1]" not in err, "C18 says why; an orphan report would only confuse"
 
 
-def test_the_staged_hook_sees_it_too(gitops, run_cli, capsys):
-    assert run_cli("check", MIRROR) == 1
-    assert "[C18]" in capsys.readouterr().err
+def test_the_staged_hook_notes_it_too(gitops, run_cli, capsys):
+    assert run_cli("check", MIRROR) == 0
+    assert "notice: [C18]" in capsys.readouterr().err
 
 
 def test_an_entry_whose_target_moved_under_the_list_is_c18(repo, run_cli, capsys):
@@ -43,8 +44,8 @@ def test_an_entry_whose_target_moved_under_the_list_is_c18(repo, run_cli, capsys
     pyproject.write_text(pyproject.read_text() + 'unreviewed = ["deploy/**"]\n')
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
-    assert "[C18]" in err
-    assert err.count("[C18]") == 1, "the marker and its entry are one finding"
+    assert "error: [C18]" in err
+    assert err.count("error: [C18]") == 1, "the entry is the one gated finding"
 
 
 def test_unreviewed_must_be_a_list_of_patterns(repo, run_cli):

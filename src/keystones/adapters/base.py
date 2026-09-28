@@ -11,6 +11,10 @@ class ResolutionError(Exception):
     """A marker did not attach to anything."""
 
 
+class ParseFailure(ResolutionError):
+    """The whole file could not be read, so no marker in it can attach."""
+
+
 class Adapter(Protocol):
     name: str
     hasher_id: str

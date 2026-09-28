@@ -16,10 +16,12 @@ from keystones.models import Entry, Finding, Marker, Scope, Severity, Target
 
 
 class UnresolvedTwin(Exception):
-    def __init__(self, spec: str, reason: str) -> None:
+    def __init__(self, spec: str, reason: str, basis: bool = False) -> None:
         super().__init__(f"{spec}: {reason}")
         self.spec = spec
         self.reason = reason
+        # True when the keystone's basis cannot hash the twin's file at all.
+        self.basis = basis
 
 
 def resolve(repo_root: Path, spec: str, kind: str | None) -> tuple[object, Target, str]:
@@ -35,7 +37,7 @@ def resolve(repo_root: Path, spec: str, kind: str | None) -> tuple[object, Targe
     try:
         adapter = adapters.for_kind(rel, kind) if kind else adapters.for_symbols(rel)
     except adapters.UnknownKind as exc:
-        raise UnresolvedTwin(spec, str(exc)) from exc
+        raise UnresolvedTwin(spec, str(exc), basis=True) from exc
     src = path.read_text()
     try:
         if qualname:
@@ -66,6 +68,19 @@ def check(repo_root: Path, entries: list[Entry]) -> list[Finding]:
             try:
                 actual, target = semantic(repo_root, spec, entry.hash or None)
             except UnresolvedTwin as exc:
+                if exc.basis:
+                    findings.append(
+                        Finding(
+                            "C14",
+                            Severity.ERROR,
+                            f"twin {spec} of keystone '{entry.id}' cannot be hashed "
+                            f"with its basis (hash={entry.hash or 'auto'}): "
+                            f"{exc.reason}. A twin must share the keystone's basis.",
+                            rel,
+                            owner_hint=entry.category,
+                        )
+                    )
+                    continue
                 findings.append(
                     Finding(
                         "C17",

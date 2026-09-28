@@ -88,8 +88,37 @@ def find(repo_root: Path) -> tuple[Path | None, list[Rule]]:
 
 def owners_for(rules: list[Rule], path: str) -> Rule | None:
     """Last matching rule wins, which is how GitHub resolves it."""
-    winner = None
-    for rule in rules:
-        if rule.matches(path):
-            winner = rule
-    return winner
+    return shadowed(rules, path)[0]
+
+
+def _specificity(rule: Rule) -> tuple[int, int, int]:
+    """A literal path beats a glob; then deeper; then longer."""
+    body = rule.pattern.strip("/")
+    globbed = any(c in body for c in "*?")
+    return (0 if globbed else 1, body.count("/") + 1 if body else 0, len(body))
+
+
+def shadowed(rules: list[Rule], path: str) -> tuple[Rule | None, Rule | None]:
+    """The winning rule, and the more specific earlier rule it takes the path
+    from, when the two name different owners.
+
+    A broad rule placed after a specific one with other owners reassigns the
+    path in a way that reads as intended only by accident. The same owners
+    either way is a harmless overlap.
+    """
+    matching = [rule for rule in rules if rule.matches(path)]
+    if not matching:
+        return None, None
+    winner = matching[-1]
+    # Only the rule written for this path can be overridden: the most
+    # specific earlier one. A broad rule above it that names someone else is
+    # the ordinary shape of a CODEOWNERS file.
+    earlier = sorted(matching[:-1], key=_specificity)
+    own = earlier[-1] if earlier else None
+    if (
+        own is not None
+        and _specificity(own) > _specificity(winner)
+        and {o.casefold() for o in own.owners} != {o.casefold() for o in winner.owners}
+    ):
+        return winner, own
+    return winner, None

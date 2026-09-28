@@ -2,7 +2,7 @@
 
 import pytest
 
-from keystones.codeowners import owners_for, parse
+from keystones.codeowners import owners_for, parse, shadowed
 
 RULES = """
 /keystones/finance/  @org/finance-eng
@@ -134,6 +134,23 @@ def test_c8_still_fails_what_the_ruleset_does_not_cover(
     assert "pyproject.toml is part of the gate" in err
 
 
+def test_c8_says_which_rulesets_it_read_when_none_covers(
+    repo, run_cli, monkeypatch, capsys
+):
+    from keystones import doctor
+
+    _rulesets(repo, monkeypatch, [])
+    monkeypatch.setattr(doctor, "required_reviewers", lambda root: [])
+    monkeypatch.setattr(
+        doctor, "rulesets_applying", lambda root: ["ruleset 'main' (organization acme)"]
+    )
+    (repo / ".github" / "CODEOWNERS").unlink()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "read 1 ruleset(s): ruleset 'main' (organization acme)" in err
+    assert "none has a required_reviewers pattern" in err
+
+
 def test_c8_falls_back_to_codeowners_when_rules_cannot_be_read(
     repo, run_cli, monkeypatch, capsys
 ):
@@ -184,4 +201,172 @@ def test_c8_reads_rulesets_only_when_codeowners_leaves_a_gap(
         raise AssertionError("C8 called the GitHub API with nothing to cover")
 
     monkeypatch.setattr(doctor, "required_reviewers", never)
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- a broader later rule ---------------------------------------------------
+
+
+def test_a_later_broader_rule_that_takes_a_category_is_c8(repo, run_cli, capsys):
+    """GitHub is last-match-wins, so `/keystones/` after `/keystones/finance/`
+    hands finance's sidecars to eng without anyone noticing."""
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "category 'finance' is owned by '/keystones/' (line 2)" in err
+    assert "overrides '/keystones/finance/' (line 1)" in err
+
+
+def test_the_specific_rule_last_is_fine(repo, run_cli):
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/          @org/eng\n"
+        "/keystones/finance/  @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_later_broader_rule_that_takes_a_gate_file_is_c8(repo, run_cli, capsys):
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+        "*                    @org/everyone\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "pyproject.toml is owned by '*' (line 4)" in err
+    assert "overrides '/pyproject.toml' (line 2)" in err
+
+
+def test_shadowing_is_reported_by_rule():
+    rules = parse("/keystones/finance/ @a\n/keystones/ @b\n/other/ @c\n")
+    winner, hidden = shadowed(rules, "keystones/finance/x.md")
+    assert (winner.lineno, hidden.lineno) == (2, 1)
+    winner, hidden = shadowed(rules, "keystones/default/x.md")
+    assert (winner.lineno, hidden) == (2, None)
+    assert shadowed(rules, "elsewhere/x") == (None, None)
+
+
+def test_a_later_glob_that_takes_a_category_is_c8(repo, run_cli, capsys):
+    """Broader by glob, not by depth: `/keystones/*/*.md` after
+    `/keystones/finance/` owns finance's sidecars."""
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/keystones/*/*.md    @org/other\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "category 'finance' is owned by '/keystones/*/*.md' (line 2)" in err
+
+
+def test_a_later_broader_rule_with_the_same_owner_is_fine(repo, run_cli):
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/eng\n"
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- a category nobody uses ------------------------------------------------------
+
+
+def test_an_unused_implicit_default_needs_no_owner(repo, run_cli):
+    """`default` is always present in config; a repo that lists only its own
+    categories and keystones nothing under default is not told to own it."""
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'categories = ["default", "finance"]', 'categories = ["finance"]'
+        )
+    )
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert (
+        run_cli(
+            "add",
+            "billing/payout.py::compute_payout",
+            "--id",
+            "p",
+            "--category",
+            "finance",
+            "-m",
+            "w",
+        )
+        == 0
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_category_in_use_still_needs_an_owner(repo, run_cli, capsys):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'categories = ["default", "finance"]', 'categories = ["finance"]'
+        )
+    )
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert (
+        run_cli("add", "billing/payout.py::compute_payout", "--id", "p", "-m", "w") == 0
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "category 'default' has no CODEOWNERS owner" in capsys.readouterr().err
+
+
+def test_a_later_rule_changing_another_categorys_owner_is_not_this_ones_problem(
+    repo, run_cli
+):
+    """The category's own rule and the later glob agree on finance's owner;
+    what the glob changes is other categories, which is a separate question."""
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'categories = ["default", "finance"]', 'categories = ["finance"]'
+        )
+    )
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "*                    @org/eng\n"
+        "/keystones/          @org/eng\n"
+        "/keystones/finance/  @org/finance\n"
+        "/keystones/*/*.md    @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_shadowing_compares_against_the_most_specific_earlier_rule():
+    rules = parse("* @a\n/keystones/ @a\n/keystones/x/ @b\n/keystones/*/*.md @b\n")
+    winner, hidden = shadowed(rules, "keystones/x/_probe.md")
+    assert winner.lineno == 4 and hidden is None
+    rules = parse("/keystones/x/ @b\n/keystones/ @a\n")
+    winner, hidden = shadowed(rules, "keystones/x/_probe.md")
+    assert (winner.lineno, hidden.lineno) == (2, 1)
+
+
+def test_owner_case_does_not_make_an_override(repo, run_cli):
+    """GitHub logins and team slugs are case-insensitive."""
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @Org/Eng\n"
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
     assert run_cli("check", "--all", "--no-base") == 0

@@ -61,19 +61,20 @@ def test_a_twin_drifting_alone_is_c17(twinned, run_cli, capsys):
     assert "[C3]" not in err
 
 
-def test_the_keystone_changing_without_its_twin_is_c3_then_c17(
+def test_the_keystone_changing_alone_is_c3_and_fix_waits_for_the_copy(
     twinned, run_cli, capsys
 ):
-    """A twin is held to the reviewed code, so the copy falls behind only
-    once the keystone's own change has been reviewed."""
+    """A twin is held to the reviewed code, so `fix` will not record a hash
+    the copy does not match; the copies are aligned first."""
     edit(twinned, PAYOUT, "ROUND_HALF_UP)", "ROUND_HALF_EVEN)")
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
     assert "[C3]" in err and "[C17]" not in err
+    assert run_cli("fix", "-m", "Banker's rounding.") == 1
+    assert "does not match" in capsys.readouterr().err
+    edit(twinned, COPY, "ROUND_HALF_UP)", "ROUND_HALF_EVEN)")
     assert run_cli("fix", "-m", "Banker's rounding.") == 0
-    assert run_cli("check", "--all", "--no-base") == 1
-    err = capsys.readouterr().err
-    assert "[C17]" in err and "[C3]" not in err
+    assert run_cli("check", "--all", "--no-base") == 0
 
 
 def test_both_changing_together_needs_one_review(twinned, run_cli, capsys):
@@ -149,3 +150,128 @@ def test_a_yaml_twin_with_no_recorded_basis_is_found(repo):
     adapter, target, _ = twins.resolve(repo, "v.yaml::spec.replicas", None)
     assert adapter is structured
     assert target.qualname == "spec.replicas"
+
+
+# --- fix and twins -------------------------------------------------------------
+
+
+def test_fix_names_a_twin_it_cannot_reconcile_and_fails(twinned, run_cli, capsys):
+    """Twin-only drift: nothing to write, but "updated 0" and exit 0 hid the
+    C17 that check would raise."""
+    edit(twinned, COPY, "ROUND_HALF_UP)", "ROUND_HALF_EVEN)")
+    assert run_cli("fix") == 1
+    err = capsys.readouterr().err
+    assert f"twin {COPY}::compute_payout does not match" in err
+
+
+def test_fix_refuses_a_keystone_change_its_twin_did_not_follow(
+    twinned, run_cli, capsys
+):
+    before = (twinned / SIDECAR).read_text()
+    edit(twinned, PAYOUT, "ROUND_HALF_UP)", "ROUND_HALF_EVEN)")
+    edit(twinned, COPY, "ROUND_HALF_UP)", "ROUND_CEILING)")
+    assert run_cli("fix", "-m", "Both changed, differently.") == 1
+    assert "does not match" in capsys.readouterr().err
+    assert (twinned / SIDECAR).read_text() == before, "nothing recorded"
+
+
+def test_migrate_reports_a_twin_that_stops_matching(twinned, run_cli, capsys):
+    """A twin that matched only under the old hasher is not provable across."""
+    from keystones.adapters import python as python_adapter
+
+    sidecar = twinned / SIDECAR
+    sidecar.write_text(
+        sidecar.read_text().replace(
+            f'hasher = "{python_adapter.HASHER_ID}"', 'hasher = "keystones-ast/0"'
+        )
+    )
+    edit(twinned, COPY, "ROUND_HALF_UP)", "ROUND_HALF_EVEN)")
+    capsys.readouterr()
+    assert run_cli("migrate") == 1
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "twin" in out and COPY in out
+
+
+# --- adding to an existing keystone ------------------------------------------------
+
+
+def test_add_appends_a_twin_to_an_existing_keystone(repo, run_cli, capsys):
+    (repo / "reports").mkdir()
+    (repo / COPY).write_text(COPY_SRC)
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "payout-rounding",
+            "--category",
+            "finance",
+            "-m",
+            "GAAP rounding.",
+        )
+        == 0
+    )
+    assert (
+        run_cli(
+            "add",
+            "--id",
+            "finance/payout-rounding",
+            "--twin",
+            f"{COPY}::compute_payout",
+        )
+        == 0
+    )
+    sidecar = (repo / SIDECAR).read_text()
+    assert f'twins = ["{COPY}::compute_payout"]' in sidecar
+    assert "twin added" in sidecar
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_add_appends_a_dependency_to_an_existing_keystone(repo, run_cli):
+    (repo / "rates.py").write_text("BASE = 0.07\n")
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    assert run_cli("add", "--id", "p", "--depends", "rates.py::BASE") == 0
+    sidecar = (repo / "keystones" / "default" / "p.md").read_text()
+    assert 'depends = ["rates.py::BASE"]' in sidecar and "depends_hash" in sidecar
+    (repo / "rates.py").write_text("BASE = 0.09\n")
+    assert run_cli("check", "--all", "--no-base") == 1
+
+
+def test_add_still_refuses_a_plain_re_add(repo, run_cli, capsys):
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    assert run_cli("add", "--id", "p", "-m", "again") == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_add_refuses_a_twin_that_does_not_match_the_existing_hash(
+    repo, run_cli, capsys
+):
+    (repo / "reports").mkdir()
+    (repo / COPY).write_text(COPY_SRC.replace("0.01", "0.1"))
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    before = (repo / "keystones" / "default" / "p.md").read_text()
+    assert run_cli("add", "--id", "p", "--twin", f"{COPY}::compute_payout") == 1
+    assert "does not match" in capsys.readouterr().err
+    assert (repo / "keystones" / "default" / "p.md").read_text() == before
+
+
+# --- a twin on another basis ---------------------------------------------------------
+
+
+def test_a_twin_the_keystones_basis_cannot_hash_is_c14_not_missing(
+    repo, run_cli, capsys
+):
+    """A basis mismatch is a configuration question, not a missing copy."""
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    (repo / "copy.yaml").write_text("x: 1\n")
+    sidecar = repo / "keystones" / "default" / "p.md"
+    sidecar.write_text(
+        sidecar.read_text().replace(
+            'hash = "python"', 'hash = "python"\ntwins = ["copy.yaml::x"]'
+        )
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C14]" in err and "copy.yaml" in err
+    assert "[C17]" not in err

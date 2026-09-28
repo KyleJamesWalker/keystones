@@ -54,5 +54,15 @@ def files_at(repo_root: Path, ref: str) -> list[str]:
     return [line for line in out.splitlines() if line] if out else []
 
 
+def files_with(repo_root: Path, ref: str, word: str) -> set[str] | None:
+    """Files at `ref` containing `word`; None when git cannot say."""
+    out = _git(repo_root, "grep", "-l", "--fixed-strings", "-e", word, ref)
+    if out is None:
+        # `git grep` exits 1 with no output when nothing matches.
+        return set() if exists(repo_root, ref) else None
+    prefix = f"{ref}:"
+    return {line.removeprefix(prefix) for line in out.splitlines() if line}
+
+
 def read_at(repo_root: Path, ref: str, path: str) -> str | None:
     return _git(repo_root, "show", f"{ref}:{path}")

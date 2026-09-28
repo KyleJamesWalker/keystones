@@ -9,7 +9,7 @@ from pathlib import Path
 from keystones import adapters
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.adapters.masking import ContractError
 from keystones.adapters.treesitter import Unavailable
 from keystones.config import Config
@@ -43,24 +43,63 @@ def _tracked_files(repo_root: Path) -> list[str]:
 MAX_SCAN_BYTES = 2_000_000
 
 
-def _readable(path: Path) -> str | None:
+def _readable(path: Path, cap: int = MAX_SCAN_BYTES) -> str | None:
     """Skip binaries and anything too large to be hand-annotated."""
     try:
-        if path.stat().st_size > MAX_SCAN_BYTES:
+        if path.stat().st_size > cap:
             return None
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
 
+def unparseable(cfg: Config) -> list[tuple[str, str]]:
+    """Every file a parser claims but cannot read, with the parser's first error.
+
+    Reads files with no marker too, since the point is to find the spellings
+    to shape before a marker goes in.
+    """
+    out: list[tuple[str, str]] = []
+    for rel in _tracked_files(cfg.repo_root):
+        if cfg.is_excluded(rel) or adapters.needs_extra(rel):
+            continue
+        adapter = adapters.for_path(rel, allow_fallback=False)
+        if adapter is None:
+            continue
+        src = _readable(cfg.repo_root / rel, cfg.max_scan_bytes)
+        if src is None:
+            continue
+        try:
+            adapter.markers(rel, src)
+        except SyntaxError as exc:
+            out.append((rel, f"line {exc.lineno}: {exc.msg}"))
+        except (ResolutionError, RegionError, MarkerError) as exc:
+            out.append((rel, str(exc).splitlines()[0]))
+    return out
+
+
+def unread(cfg: Config) -> list[str]:
+    """Tracked files over the cap, which a scan never opens."""
+    out = []
+    for rel in _tracked_files(cfg.repo_root):
+        if cfg.is_excluded(rel):
+            continue
+        full = cfg.repo_root / rel
+        try:
+            if full.is_file() and full.stat().st_size > cfg.max_scan_bytes:
+                out.append(rel)
+        except OSError:
+            continue
+    return sorted(out)
+
+
 def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
     """Every file type is in scope now that a fallback adapter exists.
 
-    Parsed extensions are always considered. Everything else is included only
-    when the word appears in it, which keeps a whole-repo scan cheap.
+    A file is included only when the marker word appears in it, which keeps a
+    whole-repo scan to a read per file and a parse per marked file.
     """
     candidates = paths if paths is not None else _tracked_files(cfg.repo_root)
-    parsed = adapters.parsed_extensions()
     out = []
     sidecars = f"{cfg.root.strip('/')}/"
     for rel in candidates:
@@ -69,12 +108,9 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
         full = cfg.repo_root / rel
         if not full.is_file():
             continue
-        # A named file with no marker in it has nothing to resolve, so only a
-        # whole-repo scan pays to parse one.
-        if rel.endswith(parsed) and paths is None:
-            out.append(rel)
-            continue
-        text = _readable(full)
+        # A file with no marker in it has nothing to resolve, whatever its
+        # parser, and parsing it is where a whole-repo run spends its time.
+        text = _readable(full, cfg.max_scan_bytes)
         if text is not None and marker_grammar.looks_like_a_marker(text):
             out.append(rel)
     return sorted(out)
@@ -125,13 +161,26 @@ def scan(
         preferred = adapters.for_path(rel)
         if preferred is None:
             continue
-        src = _readable(cfg.repo_root / rel)
+        src = _readable(cfg.repo_root / rel, cfg.max_scan_bytes)
         if src is None:
             continue
         src, probes = marker_grammar.probe_pending(src)
         readable, why = True, ""
         try:
             found = preferred.markers(rel, src)
+        except SyntaxError as exc:
+            skipped.add(rel)
+            findings.append(
+                Finding(
+                    "parse",
+                    Severity.ERROR,
+                    f"{rel} does not parse: {exc.msg}. A keystone in it cannot be "
+                    "checked until it does.",
+                    rel,
+                    exc.lineno,
+                )
+            )
+            continue
         except RegionError as exc:
             findings.append(Finding("region", Severity.ERROR, str(exc), rel))
             continue
@@ -157,16 +206,53 @@ def scan(
             except (RegionError, MarkerError) as exc:
                 findings.append(Finding("marker", Severity.ERROR, f"{rel}: {exc}", rel))
                 continue
+        if readable and preferred is not fallback:
+            findings += _not_comments(rel, src, found, set(probes.values()))
         for marker in found:
             try:
                 adapter = _adapter_for(rel, marker, preferred, readable, why)
             except adapters.UnknownKind as exc:
+                if not readable and not marker.hash_kind:
+                    # One finding for the file; a kind error per marker and a
+                    # C2 per entry would all repeat that it does not parse.
+                    if rel not in skipped:
+                        skipped.add(rel)
+                        findings.append(Finding("parse", Severity.ERROR, str(exc), rel))
+                    continue
                 findings.append(
                     Finding("kind", Severity.ERROR, str(exc), rel, marker.lineno)
                 )
                 continue
+            if adapter is not preferred and hasattr(adapter, "markers"):
+                # The text scan found it; the basis's own scan decides whether
+                # it is a comment at all, as inside a YAML block scalar.
+                try:
+                    real = {m.lineno for m in adapter.markers(rel, src)}
+                except (ResolutionError, RegionError, MarkerError):
+                    real = None
+                if real is not None and marker.lineno not in real:
+                    findings.append(
+                        Finding(
+                            "marker",
+                            Severity.WARNING,
+                            "looks like a keystone marker but is not a comment, "
+                            "so it attaches to nothing. Move it into a comment, "
+                            "or add `keystones: ignore-file` if it is only an "
+                            "example.",
+                            rel,
+                            marker.lineno,
+                        )
+                    )
+                    continue
             try:
                 target = adapter.resolve(src, marker)
+            except ParseFailure as exc:
+                # Once per file: every marker in it fails for the same reason,
+                # and its entries are not orphans.
+                if rel not in skipped:
+                    skipped.add(rel)
+                    findings.append(Finding("parse", Severity.ERROR, str(exc), rel))
+                continue
             except (ResolutionError, SyntaxError, RegionError) as exc:
                 findings.append(
                     Finding("resolve", Severity.ERROR, str(exc), rel, marker.lineno)
@@ -176,6 +262,37 @@ def scan(
                 Resolved(marker, target, adapter)
             )
     return resolved, pending, findings, skipped
+
+
+def _not_comments(
+    rel: str, src: str, found: list[Marker], pending: set[int]
+) -> list[Finding]:
+    """Marker-shaped lines the lexer did not see as comments: a marker inside a
+    string literal attaches to nothing, and saying so beats silence."""
+    if marker_grammar.is_ignored(src):
+        return []
+    seen = {m.lineno for m in found} | pending
+    out = []
+    for lineno, raw in enumerate(marker_grammar.split_lines(src), start=1):
+        line = raw.rstrip("\r\n")
+        if lineno in seen or not marker_grammar.is_marker(line):
+            continue
+        if not marker_grammar.parse_point(line, rel, lineno) and not (
+            marker_grammar.parse_region_start(line, rel, lineno)
+        ):
+            continue
+        out.append(
+            Finding(
+                "marker",
+                Severity.WARNING,
+                "looks like a keystone marker but is not a comment, so it "
+                "attaches to nothing. Move it into a comment, or add "
+                "`keystones: ignore-file` if it is only an example.",
+                rel,
+                lineno,
+            )
+        )
+    return out
 
 
 def _adapter_for(rel: str, marker: Marker, preferred, readable: bool, why: str = ""):

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "keystones"
-dynamic = ["version"]
+version = "0.5.0"
 description = "Require SME review of load-bearing code by pinning a review gate to an AST node"
 readme = "README.md"
 license = "MIT"
@@ -55,12 +55,6 @@ dev = [
     "pyyaml==6.0.3",
 ]
 
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/keystones/_version.py"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/keystones"]
 
@@ -85,5 +79,5 @@ testpaths = ["tests"]
 
 [tool.keystones]
 root = "keystones"
-exclude = ["tests/fixtures/**"]
+exclude = ["tests/**"]
 categories = ["default", "hasher"]

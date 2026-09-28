@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import io
 import tokenize
+import warnings
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
@@ -27,9 +29,19 @@ DISABLERS = frozenset(
     }
 )
 
+# Calls that stop a whole module from collecting.
+MODULE_SKIPS = frozenset({"pytest.skip", "pytest.importorskip"})
+
 name = "python"
 hasher_id = HASHER_ID
 extensions = (".py", ".pyi")
+
+
+def _parse(src: str) -> ast.Module:
+    """A SyntaxWarning in the file, an invalid escape say, is not ours to print."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        return ast.parse(src)
 
 
 def _tokens(src: str) -> list[tokenize.TokenInfo]:
@@ -55,6 +67,9 @@ def markers(path: str, src: str) -> list[Marker]:
     """
     if marker_grammar.is_ignored(src):
         return []
+    # A file that does not parse has no definitions to attach to; saying so
+    # here beats an orphan-entry report that points at the sidecar.
+    _parse(src)
     found = [
         m
         for m in marker_grammar.scan_lines(path, src, _comments(src))[0]
@@ -124,7 +139,7 @@ def resolve(src: str, marker: Marker) -> Target:
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)
-    tree = ast.parse(src)
+    tree = _parse(src)
     if marker.scope is Scope.FILE:
         end = (
             max((getattr(n, "end_lineno", 1) or 1) for n in tree.body)
@@ -159,7 +174,7 @@ def resolve(src: str, marker: Marker) -> Target:
 
 
 def _node_for(src: str, target: Target) -> ast.AST:
-    tree = ast.parse(src)
+    tree = _parse(src)
     if target.qualname is None:
         return tree
     for qualname, node in _definitions(tree):
@@ -203,7 +218,7 @@ def hash_stored_source(source: str, target: str) -> str:
     """Re-hash stored canonical source. Backs C5 and hasher migration proofs."""
     if "#L" in target:
         return fallback.hash_stored_source(source, target)
-    tree = ast.parse(source)
+    tree = _parse(source)
     if "::" not in target:
         return semantic_hash(tree)
     if not tree.body:
@@ -212,7 +227,7 @@ def hash_stored_source(source: str, target: str) -> str:
 
 
 def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
-    tree = ast.parse(src)
+    tree = _parse(src)
     for name, node in _definitions(tree):
         if name == qualname:
             return Target(path, name, _start_line(node), node.end_lineno)
@@ -270,7 +285,7 @@ def _constant(tree: ast.Module, name: str, path: str) -> ast.AST | None:
 
 def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
     """Canonical text for a `depends` target: a definition, constant or attribute."""
-    tree = ast.parse(src)
+    tree = _parse(src)
     for qualname, node in _definitions(tree):
         if qualname == symbol:
             return render(node)
@@ -281,7 +296,11 @@ def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
 
 
 def _imports(tree: ast.Module) -> dict[str, str]:
-    """Local names bound by module-level imports, to the dotted name they stand for."""
+    """Module-level names to the dotted name they stand for.
+
+    Imports, plus a plain alias such as `skip = pytest.mark.skip`, resolved
+    through the imports above it.
+    """
     names: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -291,7 +310,118 @@ def _imports(tree: ast.Module) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             for alias in node.names:
                 names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, written = node.targets[0], _dotted(node.value)
+            if isinstance(target, ast.Name) and written:
+                head, _, rest = written.partition(".")
+                names[target.id] = names.get(head, head) + (f".{rest}" if rest else "")
     return names
+
+
+def _call_aliases(tree: ast.Module) -> dict[str, ast.Call]:
+    """`off = pytest.mark.skipif(...)`: the call behind a module-level name."""
+    return {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+    }
+
+
+def _statements(body: list[ast.stmt], guard: str = ""):
+    """Module-level statements reachable at import, with the `if` they sit under."""
+    for node in body:
+        if isinstance(node, ast.If):
+            cond = f" under `if {ast.unparse(node.test)}`"
+            yield from _statements(node.body, guard or cond)
+            yield from _statements(
+                node.orelse, guard or cond.replace("if ", "else of if ")
+            )
+        elif isinstance(node, ast.Try):
+            yield from _statements(node.body, guard)
+            for handler in node.handlers:
+                yield from _statements(handler.body, guard)
+        else:
+            yield node, guard
+
+
+def _module_values(tree: ast.Module) -> dict[str, str]:
+    """Module-level names to the source of everything bound to them, including
+    a reassignment under an `if`, which is recorded with its condition."""
+    out: dict[str, str] = {}
+    for node, guard in _statements(tree.body):
+        name = value = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            if isinstance(node.targets[0], ast.Name):
+                name, value = node.targets[0].id, node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name, value = node.target.id, node.value
+        if name is None or value is None:
+            continue
+        source = ast.unparse(value) + guard
+        out[name] = f"{out[name]}; {source}" if name in out else source
+    return out
+
+
+def _names_in(expr: ast.AST) -> list[str]:
+    return [n.id for n in ast.walk(expr) if isinstance(n, ast.Name)]
+
+
+def _resolved_names(
+    expr: ast.Call, values: dict[str, str], imports: dict, modules: set[str]
+) -> str:
+    """`[SKIP=False; FLAG=True under (if ...)]` for every module-level name an
+    argument uses, followed transitively; a name bound nowhere in the module
+    is recorded as not statically known."""
+    parts: list[str] = []
+    seen: set[str] = set()
+    todo = [
+        n for a in [*expr.args, *[k.value for k in expr.keywords]] for n in _names_in(a)
+    ]
+    while todo:
+        name = todo.pop(0)
+        if name in seen or hasattr(builtins, name):
+            continue
+        seen.add(name)
+        if name in values:
+            parts.append(f"{name}={values[name]}")
+            for source in values[name].split("; "):
+                try:
+                    todo += _names_in(
+                        ast.parse(source.split(" under ")[0], mode="eval")
+                    )
+                except SyntaxError:
+                    continue
+        elif name in imports:
+            if "." not in imports[name] or imports[name] in modules:
+                continue  # a module: `sys.platform` is not a flag to follow
+            parts.append(f"{name}: not statically known ({imports[name]})")
+        elif name in modules:
+            continue
+        else:
+            parts.append(f"{name}: not statically known")
+    return f" [{'; '.join(parts)}]" if parts else ""
+
+
+def _arguments(
+    expr: ast.AST,
+    values: dict[str, str] | None = None,
+    imports: dict | None = None,
+    modules: set[str] | None = None,
+) -> str:
+    """The call's arguments as written, so `skipif(True)` and `skipif(False)`
+    do not read alike, plus the source of every module-level name they use, so
+    `skipif(SKIP)` moves when `SKIP` does. Empty for a bare mark."""
+    if not isinstance(expr, ast.Call):
+        return ""
+    parts = [ast.unparse(a) for a in expr.args]
+    parts += [f"{k.arg}={ast.unparse(k.value)}" for k in expr.keywords]
+    text = f"({', '.join(parts)})"
+    if values is not None:
+        text += _resolved_names(expr, values, imports or {}, modules or set())
+    return text
 
 
 def _dotted(expr: ast.AST) -> str | None:
@@ -323,25 +453,80 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
     left out here. One on an enclosing class, or a `pytestmark`, disables it
     without moving a byte of it.
     """
-    tree = ast.parse(src)
+    tree = _parse(src)
     defs = dict(_definitions(tree))
     node = defs.get(qualname)
     if not isinstance(node, _DEFS):
         return []
     imports = _imports(tree)
+    modules = {
+        alias.asname or alias.name.split(".")[0]
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    calls = _call_aliases(tree)
+    values = _module_values(tree)
     wanted = DISABLERS | set(extra)
     found: list[str] = []
 
-    def scan(exprs: list[ast.AST], where: str) -> None:
-        for expr in exprs:
-            written = _dotted(expr)
-            if written is None:
-                continue
-            head, _, rest = written.partition(".")
-            name = imports.get(head, head) + (f".{rest}" if rest else "")
-            if any(name == w or name.endswith(f".{w}") for w in wanted):
-                found.append(f"{name} on {where}")
+    def resolved(expr: ast.AST) -> str | None:
+        written = _dotted(expr)
+        if written is None:
+            return None
+        head, _, rest = written.partition(".")
+        return imports.get(head, head) + (f".{rest}" if rest else "")
 
+    def scan(exprs: list[ast.AST], where: str, only_referencing: bool = False) -> None:
+        for expr in exprs:
+            name = resolved(expr)
+            if name and any(name == w or name.endswith(f".{w}") for w in wanted):
+                # A bare name may stand for a call made at module level.
+                call = calls.get(expr.id) if isinstance(expr, ast.Name) else expr
+                args = _arguments(call, values, imports, modules)
+                if only_referencing and "[" not in args:
+                    continue  # the mark's own text is inside the hash already
+                found.append(f"{name}{args} on {where}")
+
+    def switches(body: list[ast.stmt], where: str) -> None:
+        for name, node in _assignments(body):
+            value = getattr(node, "value", None)
+            off = isinstance(value, ast.Constant) and not value.value
+            if name == "__test__" and off:
+                found.append(f"__test__ = {ast.unparse(value)} {where}")
+        for node, guard in _statements(body):
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                name = resolved(node.value)
+                if name in MODULE_SKIPS:
+                    call = _arguments(node.value, values, imports, modules)
+                    found.append(f"{name}{call} {where}{guard}")
+            # `TestX.__test__ = False` written after the class.
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "__test__"
+                    and isinstance(target.value, ast.Name)
+                    and isinstance(value, ast.Constant)
+                    and not value.value
+                ):
+                    found.append(
+                        f"__test__ = {ast.unparse(value)} on class {target.value.id}"
+                    )
+
+    # The function's own decorators are inside its hash, except for what they
+    # reach outside it: a module-level name in a mark's arguments, or an
+    # alias, `@off`, whose binding lives at module level.
+    scan(node.decorator_list, qualname, only_referencing=True)
+    for expr in node.decorator_list:
+        if not isinstance(expr, ast.Name) or expr.id not in values:
+            continue
+        bound = calls.get(expr.id, expr)
+        name = resolved(bound) if expr.id in calls else imports.get(expr.id)
+        if name is None:
+            name = values[expr.id]
+        args = _arguments(bound, values, imports, modules)
+        found.append(f"{name}{args} via {expr.id} on {qualname}")
     parts = qualname.split(".")
     for depth in range(len(parts) - 1, 0, -1):
         prefix = ".".join(parts[:depth])
@@ -349,7 +534,9 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
         if isinstance(enclosing, ast.ClassDef):
             scan(enclosing.decorator_list, f"class {prefix}")
             scan(_marks(enclosing.body), f"class {prefix} pytestmark")
+            switches(enclosing.body, f"on class {prefix}")
     scan(_marks(tree.body), "module pytestmark")
+    switches(tree.body, "at module level")
     return sorted(set(found))
 
 
@@ -365,7 +552,7 @@ def duplicate_qualnames(path: str, src: str) -> set[str]:
     """
     seen: set[str] = set()
     dupes: set[str] = set()
-    for qualname, _ in _definitions(ast.parse(src)):
+    for qualname, _ in _definitions(_parse(src)):
         if qualname in seen:
             dupes.add(qualname)
         seen.add(qualname)

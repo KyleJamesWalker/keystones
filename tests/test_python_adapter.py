@@ -238,3 +238,26 @@ def test_a_class_attribute_dependency_end_to_end(repo, run_cli, capsys):
     path.write_text(path.read_text().replace("0.5", "0.6"))
     assert run_cli("check", "--all", "--no-base") == 1
     assert "[C11] a dependency of keystone 'fee' changed" in capsys.readouterr().err
+
+
+# --- a marker that is not a comment ------------------------------------------------
+
+
+def test_a_marker_line_inside_a_string_is_warned_about(repo, run_cli, capsys):
+    """An embedded YAML pod spec with a marker in it attaches to nothing, and
+    silence would let its author believe the gate is on."""
+    (repo / "spec.py").write_text(
+        'POD = """\n# keystone(finance): pod-limits\nlimits:\n  cpu: 2\n"""\n'
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+    err = capsys.readouterr().err
+    assert "spec.py:2: warning: [marker]" in err
+    assert "not a comment" in err
+
+
+def test_the_ignore_directive_silences_the_string_warning(repo, run_cli, capsys):
+    (repo / "spec.py").write_text(
+        '# keystones: ignore-file\nPOD = """\n# keystone(finance): pod-limits\n"""\n'
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+    assert capsys.readouterr().err == ""

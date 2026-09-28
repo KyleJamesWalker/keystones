@@ -191,3 +191,12 @@ def test_masking_is_shared_between_adapters():
     assert masking.preprocessed(None, "a\nb") == ("a\nb", "")
     assert issubclass(masking.ContractError, ResolutionError)
     assert issubclass(masking.PreprocessorRefused, ResolutionError)
+
+
+def test_add_on_a_refused_whole_file_says_so_and_points_at_text(repo, run_cli, capsys):
+    """It escaped as a traceback before."""
+    setup(repo, run_cli, src=TEMPLATED.replace("directive here", "REFUSE"))
+    assert run_cli("add", "rev.sql", "--id", "whole", "-m", "w") == 1
+    err = capsys.readouterr().err
+    assert "cannot mask" in err and "--hash text" in err
+    assert "Traceback" not in err

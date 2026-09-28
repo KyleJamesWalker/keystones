@@ -14,10 +14,11 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          # hatch-vcs reads the version from the tag, so the tag must be here.
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
+      - name: The tag must be the version pyproject.toml carries
+        run: |
+          version=$(uv version --short)
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but version $version"; exit 1; }
       - run: uv build
       - run: ls -l dist/
       - run: uv publish --trusted-publishing always

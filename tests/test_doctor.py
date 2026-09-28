@@ -42,8 +42,17 @@ def api(monkeypatch):
 
     monkeypatch.setattr(doctor, "_get", fake_get)
     monkeypatch.setattr(doctor, "_token", lambda: "t")
-    monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
+    monkeypatch.setattr(doctor, "slug", lambda root, repo=None: ("o", "r"))
     return state
+
+
+@pytest.fixture(autouse=True)
+def codeowners_file(request, tmp_path):
+    """Code owner review means nothing without a CODEOWNERS file."""
+    if "repo" in request.fixturenames:
+        return  # the repo fixture writes its own
+    (tmp_path / ".github").mkdir(exist_ok=True)
+    (tmp_path / ".github" / "CODEOWNERS").write_text("/keystones/ @org/eng\n")
 
 
 def errors(findings):
@@ -127,7 +136,7 @@ def fake_gh(monkeypatch, stdout="", error=None):
 @pytest.mark.parametrize("error", [None, FileNotFoundError("gh")])
 def test_no_token_is_a_skip_not_a_failure(tmp_path, monkeypatch, error):
     fake_gh(monkeypatch, error=error)
-    monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
+    monkeypatch.setattr(doctor, "slug", lambda root, repo=None: ("o", "r"))
     with pytest.raises(doctor.Unavailable, match="gh auth token"):
         doctor.run(tmp_path)
 
@@ -342,3 +351,62 @@ def test_an_unreadable_rules_endpoint_is_reported_not_treated_as_no_rules(
     found = errors(doctor.run(tmp_path))
     assert any("HTTP 403" in f.message for f in found)
     assert not any("no protection and no ruleset" in f.message for f in found)
+
+
+# --- every ruleset is named ------------------------------------------------
+
+
+def test_a_ruleset_beside_classic_protection_is_still_named_and_audited(tmp_path, api):
+    """Classic protection satisfied everything first, so the ruleset read as
+    unused and its bypass list went unmentioned."""
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {
+        7: {
+            "name": "protect-main",
+            "bypass_actors": [{"actor_type": "OrganizationAdmin"}],
+        }
+    }
+    report = doctor.audit(tmp_path)
+    assert errors(report.findings) == []
+    assert set(report.satisfied.values()) == {doctor.CLASSIC}
+    label = "ruleset 'protect-main' (organization acme)"
+    assert report.rulesets[label] == [
+        doctor.REVIEW,
+        doctor.CODE_OWNER,
+        doctor.APPROVALS,
+        doctor.STALE,
+        doctor.CHECK,
+    ]
+    assert any("lets 1 actor(s) bypass" in m for m in warnings(report.findings))
+
+
+def test_the_cli_lists_every_applying_ruleset(repo, run_cli, api, capsys):
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {7: {"name": "protect-main", "bypass_actors": []}}
+    assert run_cli("doctor") == 0
+    out = capsys.readouterr().out
+    assert "ruleset 'protect-main' (organization acme) requires:" in out
+    assert doctor.CHECK in out
+
+
+# --- where the repo comes from, and what code owner review needs -------------
+
+
+def test_repo_may_be_given_or_read_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    assert doctor.slug(tmp_path, "acme/widgets") == ("acme", "widgets")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/gadgets")
+    assert doctor.slug(tmp_path) == ("acme", "gadgets")
+
+
+def test_a_remoteless_clone_without_a_repo_is_a_skip(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    with pytest.raises(doctor.Unavailable, match="--repo"):
+        doctor.slug(tmp_path)
+
+
+def test_code_owner_review_needs_a_codeowners_file(tmp_path, api):
+    (tmp_path / ".github" / "CODEOWNERS").unlink()
+    report = doctor.audit(tmp_path)
+    assert doctor.CODE_OWNER not in report.satisfied
+    assert any("no CODEOWNERS file" in f.message for f in errors(report.findings))

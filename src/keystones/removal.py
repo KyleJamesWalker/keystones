@@ -13,6 +13,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from keystones import adapters, gitref
+from keystones import markers as marker_grammar
 from keystones.config import Config, default_excluded
 from keystones.models import Finding, Severity
 
@@ -64,6 +65,8 @@ def inventory_at(repo_root: Path, ref: str) -> Inventory:
     root, categories, exclude, include = _config_at(repo_root, ref)
     inv = Inventory(categories=categories, exclude=exclude, include=include)
     supported = adapters.supported_extensions()
+    # A file that never held the marker word cannot have lost a marker.
+    marked = gitref.files_with(repo_root, ref, marker_grammar.ANY)
 
     for rel in gitref.files_at(repo_root, ref):
         if rel.startswith(f"{root}/") and rel.endswith(".md"):
@@ -72,6 +75,8 @@ def inventory_at(repo_root: Path, ref: str) -> Inventory:
                 inv.entries.add((parts[1], Path(rel).stem))
             continue
         if not rel.endswith(supported) or inv.excludes(rel):
+            continue
+        if marked is not None and rel not in marked:
             continue
         adapter = adapters.for_path(rel)
         src = gitref.read_at(repo_root, ref, rel)

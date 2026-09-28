@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
 import os
+import pathlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,9 +15,10 @@ from pathlib import Path
 from keystones import adapters, dependencies, gitref, sidecar
 from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
-from keystones.checks import disablers, run_all
+from keystones.checks import disablers, oversized, run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect, scan
+from keystones.discovery import unread as discovery_unread
 from keystones.models import Entry, Finding, Marker, Scope, Severity
 
 
@@ -43,10 +47,26 @@ def _default_format() -> str:
     return "github" if os.environ.get("GITHUB_ACTIONS") == "true" else "plain"
 
 
-def _report(findings, fmt: str) -> None:
+def _report(findings, fmt: str, repo_root: Path | None = None) -> None:
     for finding in findings:
+        finding = _relative(finding, repo_root)
         line = finding.format_github() if fmt == "github" else finding.format_plain()
         print(line, file=sys.stderr)
+
+
+def _relative(finding: Finding, repo_root: Path | None) -> Finding:
+    """A sidecar's path is stored absolute; a finding should read, and attach
+    to a pull request, by the repo-relative one."""
+    if repo_root is None or not finding.path:
+        return finding
+    path = Path(finding.path)
+    if not path.is_absolute():
+        return finding
+    try:
+        rel = path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return finding
+    return dataclasses.replace(finding, path=str(rel))
 
 
 def _entries(cfg: Config) -> list[Entry]:
@@ -76,11 +96,70 @@ def _staged_entries(
     return entries, findings
 
 
+def _normalise(cfg: Config, paths: list[str]) -> tuple[list[str], list[Finding]]:
+    """Every spelling of a path as its repo-relative POSIX form.
+
+    `./a.py`, `a/../a.py` and an absolute path all name the same file, and a
+    marker's path in a sidecar is the relative one.
+    """
+    out: list[str] = []
+    findings: list[Finding] = []
+    root = cfg.repo_root.resolve()
+    for given in paths:
+        full = pathlib.Path(given)
+        if not full.is_absolute():
+            # A hook runs from the repo root and names files by it; a person
+            # elsewhere may name one by the working directory instead.
+            from_root = cfg.repo_root / full
+            full = from_root if from_root.exists() else pathlib.Path.cwd() / full
+        try:
+            rel = full.resolve().relative_to(root).as_posix()
+        except ValueError:
+            findings.append(
+                Finding("path", Severity.ERROR, f"{given} is outside the repository")
+            )
+            continue
+        out.append("" if rel == "." else rel)
+    return out, findings
+
+
+def _expand_directories(cfg: Config, paths: list[str]) -> list[str]:
+    """A directory stands for the tracked files under it."""
+    from keystones.discovery import _tracked_files
+
+    out: list[str] = []
+    tracked = None
+    for rel in paths:
+        if rel == "":
+            out += _tracked_files(cfg.repo_root)
+            continue
+        if (cfg.repo_root / rel).is_dir():
+            tracked = _tracked_files(cfg.repo_root) if tracked is None else tracked
+            prefix = rel.rstrip("/") + "/"
+            out += [t for t in tracked if t.startswith(prefix)]
+        else:
+            out.append(rel)
+    return out
+
+
 def _check_paths(args, cfg: Config, paths: list[str]) -> int:
     """The staged hook: cost follows the files passed, not the size of the repo."""
-    from keystones.checks import c2_orphan_entries, c5_stored_source
+    from keystones.checks import (
+        c2_orphan_entries,
+        c5_stored_source,
+        c11_dependencies,
+        c17_twins,
+    )
 
-    staged, findings = _staged_entries(cfg, paths)
+    paths, findings = _normalise(cfg, paths)
+    paths = _expand_directories(cfg, paths)
+    staged, more = _staged_entries(cfg, paths)
+    findings += more
+    for rel in paths:
+        if not (cfg.repo_root / rel).exists():
+            findings.append(
+                Finding("path", Severity.ERROR, f"{rel} does not exist", rel)
+            )
     targets = {entry.target.split("::")[0].split("#")[0] for entry in staged.values()}
     resolved, found, skipped = collect(cfg, sorted({*paths, *targets}))
     findings += found
@@ -105,13 +184,62 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
         scoped=True,
         warn_only=args.warn_only,
     )
+    too_big, unread = oversized(cfg, list(entries.values()))
+    findings += too_big
+    for rel in paths:
+        full = cfg.repo_root / rel
+        if (
+            rel not in unread
+            and not cfg.is_excluded(rel)
+            and full.is_file()
+            and full.stat().st_size > cfg.max_scan_bytes
+        ):
+            findings.append(
+                Finding(
+                    "size",
+                    Severity.WARNING,
+                    f"{rel} is over max_scan_bytes ({cfg.max_scan_bytes}) and was "
+                    "not read; a keystone in it is checked only by `check --all`",
+                    rel,
+                )
+            )
     findings += c5_stored_source(staged)
-    findings += c2_orphan_entries(resolved, staged, skipped)
+    findings += c2_orphan_entries(resolved, staged, skipped | unread)
+    # The staged keystones' own dependencies and twins, plus every keystone
+    # whose dependency or twin is among the staged files. The reverse lookup
+    # reads sidecars only, never the rest of the tree.
+    linked = dict(entries)
+    staged_paths = set(paths)
+    for category in cfg.categories:
+        directory = cfg.category_dir(category)
+        for sidecar_path in (
+            sorted(directory.glob("*.md")) if directory.is_dir() else []
+        ):
+            try:
+                entry = sidecar.parse(sidecar_path, category)
+            except (sidecar.SidecarError, ValueError):
+                continue  # reported already if staged; otherwise --all's
+            named = {t.partition("::")[0] for t in entry.twins + entry.depends}
+            if named & staged_paths:
+                linked.setdefault(entry.key, entry)
+    findings += c11_dependencies(cfg, list(linked.values()))
+    findings += c17_twins(cfg, list(linked.values()))
+    through = len(linked) - len(entries)
+    # One keystone can be reached through its file and its sidecar in one run.
+    unique: dict[tuple, Finding] = {}
+    for f in findings:
+        unique.setdefault((f.check, f.path, f.lineno, f.message), f)
+    findings = list(unique.values())
     if not resolved and not staged and not findings:
+        if through:
+            print(f"keystones: {through} keystone(s) verified through twins or depends")
         return 0
-    _report(findings, args.format or _default_format())
+    _report(findings, args.format or _default_format(), cfg.repo_root)
     if all(f.severity is Severity.NOTICE for f in findings):
-        print(f"keystones: {len(resolved)} keystone(s) verified")
+        print(
+            f"keystones: {len(resolved)} keystone(s) verified. Not run here: C2, "
+            "C6, C8, C9, C10 and C12; `keystones check --all` runs them."
+        )
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
 
 
@@ -129,19 +257,70 @@ def cmd_check(args, cfg: Config) -> int:
                 file=sys.stderr,
             )
     resolved, findings, skipped = collect(cfg, None)
-    findings = findings + run_all(
+    entry_list = _entries(cfg)
+    too_big, unread = oversized(cfg, entry_list)
+    findings = findings + too_big
+    findings += run_all(
         cfg,
         resolved,
-        _entries(cfg),
+        entry_list,
         warn_only=args.warn_only,
         base=base,
-        skipped=skipped,
+        skipped=skipped | unread,
     )
-    _report(findings, args.format or _default_format())
+    _report(findings, args.format or _default_format(), cfg.repo_root)
     errors = [f for f in findings if f.severity is Severity.ERROR]
     if all(f.severity is Severity.NOTICE for f in findings):
         print(f"keystones: {len(resolved)} keystone(s) verified")
     return 1 if errors else 0
+
+
+def _extend(args, cfg: Config, item, category: str, keystone_id: str, twins, depends):
+    """`add --id <existing> --twin/--depends`: append to the entry, hashed now."""
+    path = cfg.sidecar_path(category, keystone_id)
+    entry = sidecar.parse(path, category)
+    src = (cfg.repo_root / item.marker.path).read_text()
+    try:
+        semantic, _ = item.adapter.hashes(src, item.target)
+    except ResolutionError as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
+    if semantic != entry.semantic:
+        print(
+            f"keystones: '{keystone_id}' has drifted; run `keystones fix` before "
+            "adding to it",
+            file=sys.stderr,
+        )
+        return 1
+    new_twins = [t for t in twins if t not in entry.twins]
+    problem = _twins_mismatch(cfg, new_twins, item.adapter, item.marker.path, semantic)
+    if problem:
+        print(f"keystones: {problem}", file=sys.stderr)
+        return 1
+    new_depends = [d for d in depends if d not in entry.depends]
+    try:
+        depends_hash = dependencies.combined_hash(
+            cfg.repo_root, entry.depends + new_depends, cfg.max_scan_bytes
+        )
+    except dependencies.UnresolvedDependency as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
+    today = datetime.date.today().isoformat()
+    author = _git_author(cfg.repo_root)
+    if new_twins:
+        entry.twins += new_twins
+        entry.history.insert(
+            0, f"{today} - twin added: {', '.join(new_twins)}. ({author})"
+        )
+    if new_depends:
+        entry.depends += new_depends
+        entry.depends_hash = depends_hash
+        entry.history.insert(
+            0, f"{today} - depends added: {', '.join(new_depends)}. ({author})"
+        )
+    sidecar.write(path, entry)
+    print(f"keystones: extended '{keystone_id}' in {category}")
+    return 0
 
 
 def _twins_mismatch(
@@ -190,7 +369,7 @@ def _keys_named(values: list[str], keys) -> set[tuple[str, str]]:
 def cmd_fix(args, cfg: Config) -> int:
     resolved, _, findings, _ = scan(cfg, None)
     if findings:
-        _report(findings, "plain")
+        _report(findings, "plain", cfg.repo_root)
         return 1
 
     entries = {entry.key: entry for entry in _entries(cfg)}
@@ -230,7 +409,9 @@ def cmd_fix(args, cfg: Config) -> int:
             )
             return 1
         try:
-            depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+            depends_hash = dependencies.combined_hash(
+                cfg.repo_root, entry.depends, cfg.max_scan_bytes
+            )
         except dependencies.UnresolvedDependency as exc:
             print(f"keystones: {entry.id}: {exc}", file=sys.stderr)
             return 1
@@ -243,7 +424,23 @@ def cmd_fix(args, cfg: Config) -> int:
             or depends_hash != stored_depends
             or disabled_by != sorted(entry.disabled_by)
         )
-        if not semantic_changed and text == entry.text and target_str == entry.target:
+        # A twin that no longer matches is not reconciled by writing: it needs
+        # the copies brought back in line, or the twin taken off the list.
+        problem = _twins_mismatch(
+            cfg, entry.twins, item.adapter, item.marker.path, semantic
+        )
+        if problem:
+            print(f"keystones: '{entry.id}': {problem}", file=sys.stderr)
+            failed = True
+            continue
+        source = item.adapter.canonical_source(src, item.target)
+        unchanged = (
+            not semantic_changed
+            and text == entry.text
+            and target_str == entry.target
+            and source == entry.source
+        )
+        if unchanged:
             continue
         if semantic_changed and not args.message:
             print(
@@ -264,16 +461,20 @@ def cmd_fix(args, cfg: Config) -> int:
             )
             return 1
         if target_str != entry.target and not semantic_changed and not args.message:
-            entry.history.insert(0, f"{today} - moved to {target_str}. {author}")
+            entry.history.insert(0, f"{today} - moved to {target_str}. ({author})")
         elif args.message:
-            entry.history.insert(0, f"{today} - {args.message} {author}")
+            entry.history.insert(0, f"{today} - {args.message} ({author})")
+        elif not semantic_changed and text == entry.text and source != entry.source:
+            entry.history.insert(0, f"{today} - stored source refreshed. ({author})")
         entry.target = target_str
         entry.semantic = semantic
         entry.text = text
-        entry.hash = item.adapter.kind_for_path(item.marker.path)
+        entry.hash = adapters.kind_for(item.adapter, item.target)
         entry.hasher = adapters.hasher_id(item.adapter, item.target)
-        entry.source = item.adapter.canonical_source(src, item.target)
-        entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        entry.source = source
+        entry.depends_hash = dependencies.combined_hash(
+            cfg.repo_root, entry.depends, cfg.max_scan_bytes
+        )
         entry.disabled_by = disabled_by
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
         changed.append(entry.id)
@@ -333,10 +534,6 @@ def _adopt(args, cfg: Config) -> int:
     whose boundaries are already in the file.
     """
     resolved, _, findings, _ = scan(cfg, None)
-    if findings:
-        _report(findings, "plain")
-        return 1
-
     wanted_category, _, keystone_id = args.id.rpartition("/")
     match = [
         item
@@ -357,6 +554,14 @@ def _adopt(args, cfg: Config) -> int:
         )
         return 1
     if not match:
+        _report(findings, "plain", cfg.repo_root)
+        unread = discovery_unread(cfg)
+        if unread:
+            print(
+                f"keystones: not read, over max_scan_bytes ({cfg.max_scan_bytes}): "
+                + ", ".join(unread),
+                file=sys.stderr,
+            )
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
             "write one, or check the id.",
@@ -382,7 +587,41 @@ def _adopt(args, cfg: Config) -> int:
 
     item = match[0]
     category = item.marker.category
+    if item.target.qualname is not None:
+        src = (cfg.repo_root / item.marker.path).read_text()
+        try:
+            dupes = item.adapter.duplicate_qualnames(item.marker.path, src)
+        except Exception:
+            dupes = set()
+        if item.target.qualname in dupes:
+            print(
+                f"keystones: {item.marker.path} defines '{item.target.qualname}' "
+                "more than once, so a keystone on it cannot say which one it "
+                "protects. Rename one of them first.",
+                file=sys.stderr,
+            )
+            return 1
+    # A problem in the target's own file blocks; one elsewhere is somebody
+    # else's, and must not stop this keystone from being adopted.
+    blocking = [
+        f
+        for f in findings
+        if f.path == item.marker.path and f.severity is Severity.ERROR
+    ]
+    if blocking:
+        _report(blocking, "plain", cfg.repo_root)
+        return 1
+    for finding in findings:
+        print(
+            "keystones: warning: "
+            + ("" if finding.path == item.marker.path else "elsewhere, ")
+            + finding.format_plain(),
+            file=sys.stderr,
+        )
     if cfg.sidecar_path(category, keystone_id).exists():
+        additions = list(getattr(args, "twins", None) or []), list(args.depends or [])
+        if any(additions):
+            return _extend(args, cfg, item, category, keystone_id, *additions)
         print(
             f"keystones: '{keystone_id}' already exists in {category}",
             file=sys.stderr,
@@ -397,7 +636,9 @@ def _adopt(args, cfg: Config) -> int:
         return 1
     depends = list(args.depends or [])
     try:
-        depends_hash = dependencies.combined_hash(cfg.repo_root, depends)
+        depends_hash = dependencies.combined_hash(
+            cfg.repo_root, depends, cfg.max_scan_bytes
+        )
     except dependencies.UnresolvedDependency as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
@@ -410,7 +651,7 @@ def _adopt(args, cfg: Config) -> int:
         id=keystone_id,
         category=category,
         target=str(item.target),
-        hash=item.adapter.kind_for_path(item.marker.path),
+        hash=adapters.kind_for(item.adapter, item.target),
         hasher=adapters.hasher_id(item.adapter, item.target),
         semantic=semantic,
         text=text_digest,
@@ -423,13 +664,18 @@ def _adopt(args, cfg: Config) -> int:
         source=item.adapter.canonical_source(src, item.target),
         source_lang=_lang_for(item.marker.path),
         history=[
-            f"{datetime.date.today().isoformat()} - initial keystone. "
-            f"{_git_author(cfg.repo_root)}"
+            f"{datetime.date.today().isoformat()} - initial keystone "
+            f"({_git_author(cfg.repo_root)})"
         ],
     )
     sidecar.write(cfg.sidecar_path(category, keystone_id), entry)
     _write_index(cfg)
     print(f"keystones: adopted '{keystone_id}' on {item.target}")
+    if re.search(r"\[\d+\]$", str(item.target)):
+        print(
+            "keystones: note: that item is named by position, so inserting an "
+            "item above it moves the keystone; give it a name, id or key to pin it"
+        )
     return 0
 
 
@@ -450,7 +696,7 @@ def _complete_pending(args, cfg: Config) -> int:
 
     resolved, pending, findings, _ = scan(cfg, None)
     if findings:
-        _report(findings, "plain")
+        _report(findings, "plain", cfg.repo_root)
         return 1
     if not pending:
         print(
@@ -588,7 +834,8 @@ def _file_scope_insert_line(src: str) -> int:
 def cmd_add(args, cfg: Config) -> int:
     if args.target is None and args.id is None:
         return _complete_pending(args, cfg)
-    if args.id is None or args.message is None:
+    extending = args.target is None and (args.twins or args.depends)
+    if args.id is None or (args.message is None and not extending):
         print("keystones: add needs --id and -m", file=sys.stderr)
         return 2
     if args.target is None:
@@ -610,6 +857,15 @@ def cmd_add(args, cfg: Config) -> int:
     path = cfg.repo_root / rel
     if not path.is_file():
         print(f"keystones: no such file {rel}", file=sys.stderr)
+        return 1
+    if path.stat().st_size > cfg.max_scan_bytes:
+        print(
+            f"keystones: {rel} is {path.stat().st_size} bytes, over "
+            f"max_scan_bytes ({cfg.max_scan_bytes}), so check would never read "
+            "it. Raise [tool.keystones] max_scan_bytes, or keystone a smaller "
+            "file.",
+            file=sys.stderr,
+        )
         return 1
     pattern = cfg.unreviewed_by(rel)
     if pattern is not None:
@@ -640,10 +896,22 @@ def cmd_add(args, cfg: Config) -> int:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
     if scope is Scope.FILE:
-        target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
+        try:
+            target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
+        except ResolutionError as exc:
+            print(
+                f"keystones: {str(exc).rstrip('.')}. Gate it on text instead: "
+                "--hash text",
+                file=sys.stderr,
+            )
+            return 1
         insert_at, indent = _file_scope_insert_line(src), ""
     else:
-        target = adapter.target_for_qualname(rel, src, qualname)
+        try:
+            target = adapter.target_for_qualname(rel, src, qualname)
+        except (ResolutionError, SyntaxError) as exc:
+            print(f"keystones: {exc}", file=sys.stderr)
+            return 1
         if target is None:
             print(f"keystones: {qualname} not found in {rel}", file=sys.stderr)
             return 1
@@ -671,7 +939,9 @@ def cmd_add(args, cfg: Config) -> int:
         # Resolved before the file is touched: an unresolvable spec used to
         # leave a marker in the source with no sidecar behind it.
         depends = list(args.depends or [])
-        depends_hash = dependencies.combined_hash(cfg.repo_root, depends)
+        depends_hash = dependencies.combined_hash(
+            cfg.repo_root, depends, cfg.max_scan_bytes
+        )
     except dependencies.UnresolvedDependency as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
@@ -697,18 +967,26 @@ def cmd_add(args, cfg: Config) -> int:
     if qualname:
         marker = Marker(args.id, args.category, scope, rel, insert_at)
         try:
-            lands_on = adapter.resolve(new_src, marker).qualname
+            landed = adapter.resolve(new_src, marker)
         except ResolutionError:
-            lands_on = None
-        if lands_on != qualname:
+            landed = None
+        names = {landed.qualname} if landed else set()
+        if landed is not None and hasattr(adapter, "aliases"):
+            names |= adapter.aliases(new_src, landed.qualname)
+        if qualname not in names:
             path.write_text(src)
             print(
                 f"keystones: a marker above {qualname} would attach to "
-                f"{lands_on or 'nothing'}, which shares its first line. Move "
-                f"{qualname} onto its own line first.",
+                f"{landed.qualname if landed else 'nothing'}, which shares its "
+                f"first line. Move {qualname} onto its own line first.",
                 file=sys.stderr,
             )
             return 1
+        # The marker's own name for the target is what check resolves to, so
+        # an index is recorded under its stable selector. An explicit
+        # `[key=value]` the caller chose is kept; check accepts it as an alias.
+        if not re.search(r"\[[^\]=]+=[^\]]*\]$", qualname):
+            new_target = landed
     try:
         semantic, text = adapter.hashes(new_src, new_target)
     except ResolutionError as exc:
@@ -726,7 +1004,7 @@ def cmd_add(args, cfg: Config) -> int:
         id=args.id,
         category=args.category,
         target=str(new_target),
-        hash=adapter.kind_for_path(rel),
+        hash=adapters.kind_for(adapter, new_target),
         hasher=adapters.hasher_id(adapter, new_target),
         semantic=semantic,
         text=text,
@@ -739,8 +1017,8 @@ def cmd_add(args, cfg: Config) -> int:
         source=adapter.canonical_source(new_src, new_target),
         source_lang=_lang_for(rel),
         history=[
-            f"{datetime.date.today().isoformat()} - initial keystone. "
-            f"{_git_author(cfg.repo_root)}"
+            f"{datetime.date.today().isoformat()} - initial keystone "
+            f"({_git_author(cfg.repo_root)})"
         ],
     )
     sidecar.write(cfg.sidecar_path(args.category, args.id), entry)
@@ -758,14 +1036,18 @@ def cmd_doctor(args, cfg: Config) -> int:
             if cfg.codeowners_from_rulesets
             else None
         )
-        report = doctor.audit(cfg.repo_root, args.required_check, sidecar_paths)
+        report = doctor.audit(
+            cfg.repo_root, args.required_check, sidecar_paths, args.repo
+        )
     except doctor.Unavailable as exc:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0
     findings = report.findings
-    _report(findings, args.format or _default_format())
+    _report(findings, args.format or _default_format(), cfg.repo_root)
     for requirement, source in report.satisfied.items():
         print(f"  {requirement}: {source}")
+    for label, provides in report.rulesets.items():
+        print(f"  {label} requires: {', '.join(provides) or 'nothing keystones needs'}")
     if not findings:
         print("keystones doctor: branch protection requires owner review")
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
@@ -801,18 +1083,34 @@ def cmd_migrate(args, cfg: Config) -> int:
 
     migrated = migrate_mod.apply(cfg, resolved, outcomes)
     _write_index(cfg)
-    print(f"\nkeystones: migrated {migrated} entr(ies)")
+    print(f"\nkeystones: migrated {len(migrated)} entr(ies)")
+    # A twin that matched only under the old hasher is not provable across;
+    # it is named here rather than left for the next check to find.
+    from keystones import twins
+
+    unreconciled = twins.check(cfg.repo_root, [e for e in migrated if e.twins])
+    for finding in unreconciled:
+        print(f"keystones: needs review: twin {finding.message}", file=sys.stderr)
     if blocked:
         print(
             f"keystones: {len(blocked)} left alone; the code changed too, so they need "
             '`keystones fix -m "<why>"` and their owner',
         )
         return 1
-    return 0
+    return 1 if unreconciled else 0
 
 
 def cmd_list(args, cfg: Config) -> int:
     from keystones.staleness import DurationError, age, humanize, parse_duration
+
+    if args.unparseable:
+        from keystones.discovery import unparseable
+
+        broken = unparseable(cfg)
+        for rel, why in broken:
+            print(f"{rel}: {why}")
+        print(f"\n{len(broken)} file(s) a parser claims but cannot read")
+        return 0
 
     entries = _entries(cfg)
     if args.category:
@@ -929,6 +1227,10 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="verify branch protection actually enforces review"
     )
     doc.add_argument("--required-check", default="keystones")
+    doc.add_argument(
+        "--repo",
+        help="owner/name when there is no origin remote; GITHUB_REPOSITORY too",
+    )
     doc.add_argument("--format", choices=("plain", "github"), default=None)
     doc.set_defaults(func=cmd_doctor)
 
@@ -941,6 +1243,11 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list", help="show every keystone")
     listing.add_argument("--category")
     listing.add_argument("--stale", action="store_true", help="only overdue keystones")
+    listing.add_argument(
+        "--unparseable",
+        action="store_true",
+        help="files a parser claims but cannot read, with the first error",
+    )
     listing.set_defaults(func=cmd_list)
 
     index = sub.add_parser("index", help="regenerate INDEX.md")

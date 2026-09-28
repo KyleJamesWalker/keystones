@@ -145,6 +145,12 @@ class Config:
     unreviewed: tuple[str, ...] = ()
     # Generated files to scan after all, by pattern; overrides the built-in list.
     include: tuple[str, ...] = ()
+    # A file larger than this is never read; a keystone in one is reported.
+    max_scan_bytes: int = 2_000_000
+    # The keys that name a YAML list item, in order of preference.
+    yaml_selector_keys: tuple[str, ...] = ("name", "id", "key")
+    # True when `default` was added here rather than listed in config.
+    implicit_default: bool = False
 
     @property
     def sidecar_root(self) -> Path:
@@ -508,13 +514,17 @@ def load(repo_root: Path | None = None) -> Config:
         raise ConfigError(
             "tool.keystones.disabling_decorators must be a list of dotted names"
         )
-    for key in ("unreviewed", "include"):
+    for key in ("unreviewed", "include", "yaml_selector_keys"):
         value = data.get(key, [])
         if not isinstance(value, list) or not all(
             isinstance(v, str) and v for v in value
         ):
             raise ConfigError(f"tool.keystones.{key} must be a list of path patterns")
-    if "default" not in categories:
+    cap = data.get("max_scan_bytes", 2_000_000)
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0:
+        raise ConfigError("tool.keystones.max_scan_bytes must be a positive integer")
+    implicit_default = "default" not in categories
+    if implicit_default:
         categories = ("default", *categories)
     return Config(
         repo_root=root,
@@ -526,4 +536,7 @@ def load(repo_root: Path | None = None) -> Config:
         disabling_decorators=tuple(disabling),
         unreviewed=tuple(data.get("unreviewed", [])),
         include=tuple(data.get("include", [])),
+        max_scan_bytes=cap,
+        yaml_selector_keys=tuple(data.get("yaml_selector_keys", ("name", "id", "key"))),
+        implicit_default=implicit_default,
     )

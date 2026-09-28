@@ -60,3 +60,25 @@ def test_a_whole_file_marker_is_adopted_too(repo, run_cli):
     assert run_cli("add", PAYOUT, "--id", "payout", "-m", "All of it.") == 0
     assert path.read_text().count("keystone") == 1
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- an unrelated problem elsewhere ------------------------------------------
+
+
+def test_a_broken_marker_elsewhere_does_not_block_adopting_this_one(
+    repo, run_cli, capsys
+):
+    marked(repo, "# keystone(finance): payout-rounding")
+    (repo / "other.py").write_text("# keystone(hash=): bad\ndef g():\n    return 1\n")
+    assert run_cli("add", "--id", "payout-rounding", "-m", "GAAP rounding.") == 0
+    err = capsys.readouterr().err
+    assert "warning: elsewhere, other.py" in err
+    assert (repo / SIDECAR).exists()
+
+
+def test_a_problem_in_the_targets_own_file_still_blocks(repo, run_cli, capsys):
+    marked(repo, "# keystone(finance): payout-rounding")
+    path = repo / PAYOUT
+    path.write_text(path.read_text() + "# keystone:end\n")
+    assert run_cli("add", "--id", "payout-rounding", "-m", "GAAP rounding.") == 1
+    assert not (repo / SIDECAR).exists()

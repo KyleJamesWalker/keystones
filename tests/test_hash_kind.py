@@ -99,7 +99,7 @@ def _entry(**over) -> Entry:
         category="finance",
         target="m.sql#L2-L3",
         hash="text",
-        hasher="keystones-text/2",
+        hasher="keystones-text/3",
         semantic="sha256:a",
         text="sha256:a",
     )
@@ -162,7 +162,7 @@ def test_an_unreadable_file_with_hash_text_just_works(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
     sidecar = (repo / "keystones" / "finance" / "rev-rec.md").read_text()
     assert 'hash = "text"' in sidecar
-    assert 'hasher = "keystones-text/2"' in sidecar
+    assert 'hasher = "keystones-text/3"' in sidecar
 
 
 @needs_extra
@@ -273,3 +273,34 @@ def test_hash_qualifier_tolerates_spaces_around_the_equals():
 def test_hash_qualifier_with_a_space_and_no_value_is_still_an_error():
     with pytest.raises(mg.MarkerError):
         mg.parse_point("-- keystone(hash = ): x", "a.sql", 1)
+
+
+# --- what a region records ---------------------------------------------------
+
+
+@needs_extra
+def test_a_region_in_a_parsed_file_records_the_text_basis(repo, run_cli):
+    """It is hashed as text, so `hash` and `hasher` must both say so, or a
+    grammar bump reads as C14 and a text hasher bump as drift."""
+    (repo / "v.sql").write_text(
+        "-- keystone:start(finance): rev\nselect 1 as x\n-- keystone:end\n"
+    )
+    assert run_cli("add", "--id", "rev", "-m", "Rev.") == 0
+    sidecar = (repo / "keystones" / "finance" / "rev.md").read_text()
+    assert 'hash = "text"' in sidecar
+    assert 'hasher = "keystones-text/3"' in sidecar
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_extra
+def test_a_region_entry_recorded_under_the_grammar_kind_migrates(repo, run_cli):
+    (repo / "v.sql").write_text(
+        "-- keystone:start(finance): rev\nselect 1 as x\n-- keystone:end\n"
+    )
+    assert run_cli("add", "--id", "rev", "-m", "Rev.") == 0
+    sidecar = repo / "keystones" / "finance" / "rev.md"
+    sidecar.write_text(sidecar.read_text().replace('hash = "text"', 'hash = "sql"'))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert run_cli("migrate") == 0
+    assert 'hash = "text"' in sidecar.read_text()
+    assert run_cli("check", "--all", "--no-base") == 0

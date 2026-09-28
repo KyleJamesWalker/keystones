@@ -4,7 +4,7 @@ import pytest
 
 from keystones.checks import hasher_difference
 
-TS = "keystones-ts/2+typescript@1.20.0/d9c21109b66f"
+TS = "keystones-ts/3+typescript@1.20.0/d9c21109b66f"
 
 
 @pytest.mark.parametrize(
@@ -12,19 +12,19 @@ TS = "keystones-ts/2+typescript@1.20.0/d9c21109b66f"
     [
         (
             TS,
-            "keystones-ts/2+typescript@1.21.0/d9c21109b66f",
+            "keystones-ts/3+typescript@1.21.0/d9c21109b66f",
             "tree-sitter-language-pack 1.20.0 hashed the sidecar and 1.21.0 is "
             "installed",
         ),
         (
             TS,
-            "keystones-ts/2+typescript@1.20.0/2327218a87db",
+            "keystones-ts/3+typescript@1.20.0/2327218a87db",
             "the typescript spec in [[tool.keystones.language]] changed",
         ),
         (
             TS,
-            "keystones-ts/3+typescript@1.20.0/d9c21109b66f",
-            "keystones' tree-sitter serializer moved from 2 to 3",
+            "keystones-ts/4+typescript@1.20.0/d9c21109b66f",
+            "keystones' tree-sitter serializer moved from 3 to 4",
         ),
         (
             f"{TS}+dbt/1",
@@ -44,5 +44,22 @@ def test_the_difference_is_named(recorded, expected, said):
 
 
 def test_a_pack_difference_says_how_to_pin():
-    text = hasher_difference(TS, "keystones-ts/2+typescript@1.21.0/d9c21109b66f")
+    text = hasher_difference(TS, "keystones-ts/3+typescript@1.21.0/d9c21109b66f")
     assert "additional_dependencies" in text
+
+
+def test_a_plugin_rendering_bump_is_named_as_such():
+    text = hasher_difference(
+        "keystones-plugin/1+lkml@1.3.7/render1+x/1",
+        "keystones-plugin/1+lkml@1.3.7/render2+x/1",
+    )
+    assert "lkml's rendering moved from render1 to render2" in text
+    assert "keystones migrate" in text
+
+
+def test_a_missing_render_segment_reads_as_render1():
+    text = hasher_difference(
+        "keystones-plugin/1+lkml@1.3.7/abc123",
+        "keystones-plugin/1+lkml@1.3.7/render2",
+    )
+    assert "lkml's rendering moved from render1 to render2" in text

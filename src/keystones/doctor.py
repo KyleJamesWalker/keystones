@@ -72,9 +72,18 @@ class Report:
     # Each requirement that holds, and the protection that makes it hold.
     satisfied: dict[str, str] = field(default_factory=dict)
     required_reviewers: list[RequiredReviewers] = field(default_factory=list)
+    # Every ruleset applying to the branch and what it requires, relied on or not.
+    rulesets: dict[str, list[str]] = field(default_factory=dict)
 
 
-def slug(repo_root: Path) -> tuple[str, str]:
+def slug(repo_root: Path, repo: str | None = None) -> tuple[str, str]:
+    """`owner/name`: given, from `GITHUB_REPOSITORY`, or from the origin remote."""
+    named = repo or os.environ.get("GITHUB_REPOSITORY")
+    if named:
+        owner, _, name = named.partition("/")
+        if not owner or not name:
+            raise Unavailable(f"repo must be owner/name, not {named!r}")
+        return owner, name
     try:
         url = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -84,7 +93,10 @@ def slug(repo_root: Path) -> tuple[str, str]:
             check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise Unavailable("no origin remote") from exc
+        raise Unavailable(
+            "no origin remote; set GITHUB_REPOSITORY=owner/name, or run "
+            "`keystones doctor --repo owner/name`"
+        ) from exc
     match = _REMOTE_RE.search(url)
     if not match:
         raise Unavailable(f"origin is not a GitHub remote: {url}")
@@ -185,8 +197,7 @@ def _reviewers_in(params: dict, label: str) -> list[RequiredReviewers]:
     return out
 
 
-def required_reviewers(repo_root: Path) -> list[RequiredReviewers]:
-    """Only the ruleset rules that name reviewers for paths. See C8."""
+def _branch_rules(repo_root: Path) -> tuple[str, str, str, list]:
     owner, repo = slug(repo_root)
     token = _token()
     status, meta = _get(f"/repos/{owner}/{repo}", token)
@@ -194,13 +205,31 @@ def required_reviewers(repo_root: Path) -> list[RequiredReviewers]:
     status, rules = _paged(f"/repos/{owner}/{repo}/rules/branches/{branch}", token)
     if status != 200:
         raise Unavailable(f"cannot read the rules for '{branch}': HTTP {status}")
+    return owner, repo, token, [r for r in rules if isinstance(r, dict)]
+
+
+def required_reviewers(repo_root: Path) -> list[RequiredReviewers]:
+    """Only the ruleset rules that name reviewers for paths. See C8."""
+    owner, repo, token, rules = _branch_rules(repo_root)
     rulesets: dict = {}
     out = []
     for rule in rules:
-        if isinstance(rule, dict) and rule.get("type") == "pull_request":
+        if rule.get("type") == "pull_request":
             label = _ruleset_label(owner, repo, rule, token, rulesets)
             out += _reviewers_in(rule.get("parameters") or {}, label)
     return out
+
+
+def rulesets_applying(repo_root: Path) -> list[str]:
+    """The label of every ruleset with a rule on the default branch."""
+    owner, repo, token, rules = _branch_rules(repo_root)
+    rulesets: dict = {}
+    labels: list[str] = []
+    for rule in rules:
+        label = _ruleset_label(owner, repo, rule, token, rulesets)
+        if label not in labels:
+            labels.append(label)
+    return labels
 
 
 def run(repo_root: Path, required_check: str = "keystones") -> list[Finding]:
@@ -211,16 +240,22 @@ def audit(
     repo_root: Path,
     required_check: str = "keystones",
     sidecar_paths: list[str] | None = None,
+    repo: str | None = None,
 ) -> Report:
     """Classic branch protection and rulesets together, as GitHub enforces them.
 
     `sidecar_paths`, given under `codeowners_from_rulesets`, lets required
     reviewers covering every one of them stand in for code owner review.
     """
-    owner, repo = slug(repo_root)
+    from keystones import codeowners
+
+    owner, repo = slug(repo_root, repo)
     token = _token()
     report = Report()
     findings = report.findings
+    # "Require review from Code Owners" requires nobody without a CODEOWNERS
+    # file, so the flag alone does not satisfy the requirement.
+    has_codeowners = codeowners.find(repo_root)[0] is not None
 
     status, errors = _get(f"/repos/{owner}/{repo}/codeowners/errors", token)
     if status == 200 and isinstance(errors, dict):
@@ -308,7 +343,7 @@ def audit(
     reviews = (classic or {}).get("required_pull_request_reviews")
     if reviews:
         satisfied.setdefault(REVIEW, CLASSIC)
-        if reviews.get("require_code_owner_reviews"):
+        if reviews.get("require_code_owner_reviews") and has_codeowners:
             satisfied.setdefault(CODE_OWNER, CLASSIC)
         if reviews.get("required_approving_review_count", 0) >= 1:
             satisfied.setdefault(APPROVALS, CLASSIC)
@@ -323,6 +358,7 @@ def audit(
 
     for rule, label in rules:
         params = rule.get("parameters") or {}
+        provides = report.rulesets.setdefault(label, [])
         if rule["type"] == "required_status_checks":
             ruled = [
                 check.get("context", "")
@@ -331,14 +367,20 @@ def audit(
             contexts += ruled
             if any(required_check in context for context in ruled):
                 satisfied.setdefault(CHECK, label)
+                provides.append(CHECK)
             continue
         satisfied.setdefault(REVIEW, label)
+        provides.append(REVIEW)
         if params.get("require_code_owner_review"):
-            satisfied.setdefault(CODE_OWNER, label)
+            provides.append(CODE_OWNER)
+            if has_codeowners:
+                satisfied.setdefault(CODE_OWNER, label)
         if params.get("required_approving_review_count", 0) >= 1:
             satisfied.setdefault(APPROVALS, label)
+            provides.append(APPROVALS)
         if params.get("dismiss_stale_reviews_on_push"):
             satisfied.setdefault(STALE, label)
+            provides.append(STALE)
         report.required_reviewers += _reviewers_in(params, label)
 
     if CODE_OWNER not in satisfied and sidecar_paths:
@@ -350,6 +392,15 @@ def audit(
             sources = sorted({r.source for r in covering})
             satisfied[CODE_OWNER] = "required reviewers in " + ", ".join(sources)
 
+    if CODE_OWNER not in satisfied and not has_codeowners and REVIEW in satisfied:
+        findings.append(
+            Finding(
+                "doctor",
+                Severity.ERROR,
+                "no CODEOWNERS file, so 'Require review from Code Owners' "
+                "requires nobody and the sidecars are unguarded",
+            )
+        )
     if REVIEW not in satisfied:
         findings.append(
             Finding(
@@ -393,14 +444,14 @@ def audit(
             )
         )
 
-    relied_on = {
-        label for _, label in rules if any(label in v for v in satisfied.values())
-    }
+    # Every applying ruleset, relied on or not: one beside classic protection
+    # still lets its bypass actors merge past the gate.
+    audited: set[str] = set()
     for rule, label in rules:
         ruleset = rulesets.get(rule.get("ruleset_id"))
-        if label not in relied_on:
+        if label in audited:
             continue
-        relied_on.discard(label)
+        audited.add(label)
         # Returned only to a token with write access to the ruleset.
         if ruleset is None or "bypass_actors" not in ruleset:
             findings.append(

@@ -249,3 +249,66 @@ def test_a_region_hashed_before_comments_were_split_migrates_across(infra, run_c
 )
 def test_comment_leaders_by_file_type(path, leader):
     assert fallback.leader_for(path) == leader
+
+
+# --- a region that only moved ------------------------------------------------
+
+
+def test_a_region_that_only_moved_is_a_notice_not_drift(infra, run_cli, capsys):
+    """Every unrelated edit above a region shifts its lines; paging the owner
+    for that is what gets regions removed."""
+    edit_config(infra, "apiVersion: v1", "# added\n# lines\napiVersion: v1")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 0
+    err = capsys.readouterr().err
+    assert "notice: [C3] keystone 'vpc-peering-cidrs' moved" in err
+    assert "net.yaml#L7-L9" in err
+    assert "error" not in err
+
+
+def test_a_moved_region_whose_body_changed_is_still_c3(infra, run_cli, capsys):
+    edit_config(infra, "apiVersion: v1", "# added\napiVersion: v1")
+    edit_config(infra, "exportRoutes: true", "exportRoutes: false")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "error: [C3]" in capsys.readouterr().err
+
+
+def test_the_staged_hook_stays_quiet_on_a_pure_move(infra, run_cli, capsys):
+    edit_config(infra, "apiVersion: v1", "# added\napiVersion: v1")
+    capsys.readouterr()
+    assert run_cli("check", "--warn-only", "net.yaml") == 0
+    assert "error" not in capsys.readouterr().err
+
+
+def test_a_moved_region_whose_body_changed_says_changed(infra, run_cli, capsys):
+    """The cause is the body edit; the shift is incidental."""
+    edit_config(infra, "apiVersion: v1", "# added\napiVersion: v1")
+    edit_config(infra, "exportRoutes: true", "exportRoutes: false")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C3] keystone 'vpc-peering-cidrs' changed" in err
+    assert "no longer covers" not in err
+
+
+def test_a_block_comment_edit_inside_a_sql_region_is_c4(repo, run_cli, capsys):
+    """Only `--` lines were comments to the text hasher; `/* */` was code."""
+    (repo / "q.ddl").write_text(
+        "-- keystone:start: q\n/* the contract\n   with billing */\nselect 1 as x\n"
+        "-- keystone:end\n"
+    )
+    assert run_cli("add", "--id", "q", "-m", "why.") == 0
+    path = repo / "q.ddl"
+    path.write_text(path.read_text().replace("with billing", "with finance"))
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C4]" in err and "[C3]" not in err
+
+
+def test_a_text_two_region_migrates_to_text_three(infra, run_cli):
+    path = infra / "keystones" / "infra" / "vpc-peering-cidrs.md"
+    path.write_text(path.read_text().replace("keystones-text/3", "keystones-text/3"))
+    assert run_cli("migrate") == 0
+    assert "keystones-text/3" in path.read_text()

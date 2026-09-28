@@ -47,7 +47,7 @@ def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Ou
         kind_moved = (
             item is not None
             and bool(entry.hash)
-            and entry.hash != item.adapter.kind_for_path(item.marker.path)
+            and entry.hash != adapters.kind_for(item.adapter, item.target)
         )
         adapter = item.adapter if kind_moved else adapters.for_entry(entry)
         expected = adapters.hasher_id(adapter, entry.target)
@@ -93,10 +93,13 @@ def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Ou
     return outcomes
 
 
-def apply(cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]) -> int:
+def apply(
+    cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]
+) -> list[Entry]:
+    """Rewrite every proved entry; returns the entries written."""
     from keystones import dependencies, sidecar
 
-    migrated = 0
+    migrated: list[Entry] = []
     for outcome in outcomes:
         if not outcome.proved:
             continue
@@ -105,12 +108,14 @@ def apply(cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]) -> int
         live = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(live, item.target)
         entry.hasher = outcome.new_hasher
-        entry.hash = item.adapter.kind_for_path(item.marker.path)
+        entry.hash = adapters.kind_for(item.adapter, item.target)
         entry.semantic = semantic
         entry.text = text
         entry.target = str(item.target)
         entry.source = item.adapter.canonical_source(live, item.target)
-        entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        entry.depends_hash = dependencies.combined_hash(
+            cfg.repo_root, entry.depends, cfg.max_scan_bytes
+        )
         sidecar.write(Path(entry.path), entry)
-        migrated += 1
+        migrated.append(entry)
     return migrated

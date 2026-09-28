@@ -345,7 +345,7 @@ def test_doctor_reports_an_unusable_token_rather_than_passing(tmp_path, monkeypa
     from keystones.models import Severity
 
     monkeypatch.setattr(doctor, "_token", lambda: "t")
-    monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
+    monkeypatch.setattr(doctor, "slug", lambda root, repo=None: ("o", "r"))
     monkeypatch.setattr(
         doctor,
         "_get",
@@ -375,10 +375,10 @@ def test_generated_files_are_never_read(repo, run_cli, monkeypatch, name):
 
     original = discovery._readable
 
-    def never(p):
+    def never(p, *args):
         if p == path:
             raise AssertionError(f"read {p.name}")
-        return original(p)
+        return original(p, *args)
 
     monkeypatch.setattr(discovery, "_readable", never)
     assert run_cli("check", name) == 0
@@ -391,3 +391,26 @@ def test_a_generated_name_can_be_opted_back_in(repo, run_cli):
     (repo / "uv.lock").write_text("# keystone(file): lock\nversion = 1\n")
     assert run_cli("add", "--id", "lock", "-m", "Pinned deps.") == 0
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- discovery cost ------------------------------------------------------------
+
+
+def test_a_parsed_file_without_the_word_is_never_parsed(repo, run_cli, monkeypatch):
+    """With a parser plugin, parsing every matching file dominated the run and
+    one template that hung the parser stalled the whole gate."""
+    from keystones.adapters import python as python_adapter
+
+    parsed: list[str] = []
+    original = python_adapter.markers
+
+    def counting(path, src):
+        parsed.append(path)
+        return original(path, src)
+
+    monkeypatch.setattr(python_adapter, "markers", counting)
+    (repo / "quiet.py").write_text("def q():\n    return 1\n")
+    (repo / "marked.py").write_text("# keystone: m\ndef m():\n    return 1\n")
+    assert run_cli("check", "--all", "--no-base") == 1  # C1 for the marker
+    assert "marked.py" in parsed
+    assert "quiet.py" not in parsed
