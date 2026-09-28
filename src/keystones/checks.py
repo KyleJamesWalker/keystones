@@ -312,25 +312,25 @@ def c18_unreviewed(
         if pattern is None:
             continue
         seen.add(item.marker.key)
+        # A bot copies marked files here; failing every run on the copy would
+        # only get the path excluded. The marker is noted, never gated.
         out.append(
             Finding(
                 "C18",
-                Severity.ERROR,
-                f"keystone '{item.marker.id}' is in {item.marker.path}, which "
-                f"'{pattern}' in [tool.keystones] unreviewed says is rewritten "
-                "without review, so no gate can hold there. Remove the marker "
-                "and its entry, or take the path off the list.",
+                Severity.NOTICE,
+                f"marker '{item.marker.id}' in {item.marker.path} is ignored: "
+                f"'{pattern}' in [tool.keystones] unreviewed says the path is "
+                "rewritten without review, so no gate holds there",
                 item.marker.path,
                 item.marker.lineno,
-                owner_hint=item.marker.category,
             )
         )
     if scoped:
         return out
-    for key, entry in sorted(entries.items()):
+    for _key, entry in sorted(entries.items()):
         rel = entry.target.split("::")[0].split("#")[0]
         pattern = cfg.unreviewed_by(rel)
-        if pattern is None or key in seen:
+        if pattern is None:
             continue
         out.append(
             Finding(

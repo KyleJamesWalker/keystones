@@ -157,7 +157,8 @@ module-level alias of a mark, a module-level `pytest.skip(...)`, and
 
 Some paths are rewritten by a bot with no pull request, a GitOps mirror or a
 monitor backup, and a keystone there can only fail. List them and `add` refuses
-the path, while a marker or entry already under it is [C18]:
+the path, an entry targeting it is [C18], and a marker the bot copied there is
+noted and ignored rather than gated:
 
 ```toml
 [tool.keystones]
