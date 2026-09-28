@@ -82,7 +82,8 @@ def check(repo_root: Path, entries) -> list[Finding]:
                     "C11",
                     Severity.ERROR,
                     f"a dependency of keystone '{entry.id}' changed. Its owner must "
-                    'review this. run `keystones fix -m "<why it changed>"`',
+                    f"review this. run `keystones fix --id {entry.category}/{entry.id} "
+                    '-m "<why it changed>"`',
                     entry.path,
                     owner_hint=entry.category,
                 )

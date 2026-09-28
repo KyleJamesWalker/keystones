@@ -269,3 +269,22 @@ def test_an_unknown_hcl_symbol_is_refused(repo, run_cli, capsys):
     )
     assert status == 1
     assert "locals.nope not found" in capsys.readouterr().err
+
+
+# --- how a finding is addressed ------------------------------------------------
+
+
+def test_c11_names_the_keystone_and_a_relative_path(with_deps, run_cli, capsys):
+    edit_helper(with_deps, "round(x, 2)", "round(x, 4)")
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "--id finance/payout-rounding" in err
+    assert str(with_deps) not in err, "an absolute path does not attach in CI"
+    assert "keystones/finance/payout-rounding.md: error: [C11]" in err
+
+
+def test_github_annotations_use_relative_paths(with_deps, run_cli, capsys):
+    edit_helper(with_deps, "round(x, 2)", "round(x, 4)")
+    assert run_cli("check", "--all", "--no-base", "--format", "github") == 1
+    err = capsys.readouterr().err
+    assert "::error file=keystones/finance/payout-rounding.md" in err

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
 import os
 import re
@@ -44,10 +45,26 @@ def _default_format() -> str:
     return "github" if os.environ.get("GITHUB_ACTIONS") == "true" else "plain"
 
 
-def _report(findings, fmt: str) -> None:
+def _report(findings, fmt: str, repo_root: Path | None = None) -> None:
     for finding in findings:
+        finding = _relative(finding, repo_root)
         line = finding.format_github() if fmt == "github" else finding.format_plain()
         print(line, file=sys.stderr)
+
+
+def _relative(finding: Finding, repo_root: Path | None) -> Finding:
+    """A sidecar's path is stored absolute; a finding should read, and attach
+    to a pull request, by the repo-relative one."""
+    if repo_root is None or not finding.path:
+        return finding
+    path = Path(finding.path)
+    if not path.is_absolute():
+        return finding
+    try:
+        rel = path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return finding
+    return dataclasses.replace(finding, path=str(rel))
 
 
 def _entries(cfg: Config) -> list[Entry]:
@@ -137,7 +154,7 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
     findings += c17_twins(cfg, list(entries.values()))
     if not resolved and not staged and not findings:
         return 0
-    _report(findings, args.format or _default_format())
+    _report(findings, args.format or _default_format(), cfg.repo_root)
     if all(f.severity is Severity.NOTICE for f in findings):
         print(
             f"keystones: {len(resolved)} keystone(s) verified. Not run here: C2, "
@@ -172,7 +189,7 @@ def cmd_check(args, cfg: Config) -> int:
         base=base,
         skipped=skipped | unread,
     )
-    _report(findings, args.format or _default_format())
+    _report(findings, args.format or _default_format(), cfg.repo_root)
     errors = [f for f in findings if f.severity is Severity.ERROR]
     if all(f.severity is Severity.NOTICE for f in findings):
         print(f"keystones: {len(resolved)} keystone(s) verified")
@@ -225,7 +242,7 @@ def _keys_named(values: list[str], keys) -> set[tuple[str, str]]:
 def cmd_fix(args, cfg: Config) -> int:
     resolved, _, findings, _ = scan(cfg, None)
     if findings:
-        _report(findings, "plain")
+        _report(findings, "plain", cfg.repo_root)
         return 1
 
     entries = {entry.key: entry for entry in _entries(cfg)}
@@ -388,7 +405,7 @@ def _adopt(args, cfg: Config) -> int:
         )
         return 1
     if not match:
-        _report(findings, "plain")
+        _report(findings, "plain", cfg.repo_root)
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
             "write one, or check the id.",
@@ -418,7 +435,7 @@ def _adopt(args, cfg: Config) -> int:
     # else's, and must not stop this keystone from being adopted.
     blocking = [f for f in findings if f.path == item.marker.path]
     if blocking:
-        _report(blocking, "plain")
+        _report(blocking, "plain", cfg.repo_root)
         return 1
     for finding in findings:
         print(
@@ -492,7 +509,7 @@ def _complete_pending(args, cfg: Config) -> int:
 
     resolved, pending, findings, _ = scan(cfg, None)
     if findings:
-        _report(findings, "plain")
+        _report(findings, "plain", cfg.repo_root)
         return 1
     if not pending:
         print(
@@ -826,7 +843,7 @@ def cmd_doctor(args, cfg: Config) -> int:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0
     findings = report.findings
-    _report(findings, args.format or _default_format())
+    _report(findings, args.format or _default_format(), cfg.repo_root)
     for requirement, source in report.satisfied.items():
         print(f"  {requirement}: {source}")
     for label, provides in report.rulesets.items():
