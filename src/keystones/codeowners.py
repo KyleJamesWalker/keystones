@@ -88,8 +88,23 @@ def find(repo_root: Path) -> tuple[Path | None, list[Rule]]:
 
 def owners_for(rules: list[Rule], path: str) -> Rule | None:
     """Last matching rule wins, which is how GitHub resolves it."""
-    winner = None
-    for rule in rules:
-        if rule.matches(path):
-            winner = rule
-    return winner
+    return shadowed(rules, path)[0]
+
+
+def _specificity(rule: Rule) -> tuple[int, int]:
+    body = rule.pattern.strip("/")
+    return (body.count("/") + 1 if body else 0, len(body))
+
+
+def shadowed(rules: list[Rule], path: str) -> tuple[Rule | None, Rule | None]:
+    """The winning rule, and the more specific earlier rule it overrides.
+
+    A broad rule placed after a specific one takes the path away from the
+    owner the specific rule named, which reads as intended only by accident.
+    """
+    matching = [rule for rule in rules if rule.matches(path)]
+    if not matching:
+        return None, None
+    winner = matching[-1]
+    hidden = [r for r in matching[:-1] if _specificity(r) > _specificity(winner)]
+    return winner, (hidden[-1] if hidden else None)

@@ -2,7 +2,7 @@
 
 import pytest
 
-from keystones.codeowners import owners_for, parse
+from keystones.codeowners import owners_for, parse, shadowed
 
 RULES = """
 /keystones/finance/  @org/finance-eng
@@ -185,3 +185,53 @@ def test_c8_reads_rulesets_only_when_codeowners_leaves_a_gap(
 
     monkeypatch.setattr(doctor, "required_reviewers", never)
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- a broader later rule ---------------------------------------------------
+
+
+def test_a_later_broader_rule_that_takes_a_category_is_c8(repo, run_cli, capsys):
+    """GitHub is last-match-wins, so `/keystones/` after `/keystones/finance/`
+    hands finance's sidecars to eng without anyone noticing."""
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "category 'finance' is owned by '/keystones/' (line 2)" in err
+    assert "overrides '/keystones/finance/' (line 1)" in err
+
+
+def test_the_specific_rule_last_is_fine(repo, run_cli):
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/          @org/eng\n"
+        "/keystones/finance/  @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_later_broader_rule_that_takes_a_gate_file_is_c8(repo, run_cli, capsys):
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+        "*                    @org/everyone\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "pyproject.toml is owned by '*' (line 4)" in err
+    assert "overrides '/pyproject.toml' (line 2)" in err
+
+
+def test_shadowing_is_reported_by_rule():
+    rules = parse("/keystones/finance/ @a\n/keystones/ @b\n/other/ @c\n")
+    winner, hidden = shadowed(rules, "keystones/finance/x.md")
+    assert (winner.lineno, hidden.lineno) == (2, 1)
+    winner, hidden = shadowed(rules, "keystones/default/x.md")
+    assert (winner.lineno, hidden) == (2, None)
+    assert shadowed(rules, "elsewhere/x") == (None, None)

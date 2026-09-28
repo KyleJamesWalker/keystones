@@ -576,6 +576,19 @@ def _covered_by_ruleset(
     return problem
 
 
+def _shadowed(what: str, rule, hidden, owners_rel: str | None) -> Finding:
+    return Finding(
+        "C8",
+        Severity.ERROR,
+        f"{what} owned by '{rule.pattern}' (line {rule.lineno}), which comes "
+        f"later and overrides '{hidden.pattern}' (line {hidden.lineno}). "
+        "CODEOWNERS is last-match-wins, so the broader rule silently took the "
+        "path from the owner the specific rule named; move it above",
+        owners_rel,
+        rule.lineno,
+    )
+
+
 def c8_ownership(cfg: Config) -> list[Finding]:
     """The gate is only real if its own files are owned. See keystones/codeowners.py."""
     from keystones import codeowners
@@ -608,7 +621,7 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         )
 
     for rel in gate_files:
-        rule = codeowners.owners_for(rules, rel)
+        rule, hidden = codeowners.shadowed(rules, rel)
         if rule is None or not rule.owners:
             findings.append(
                 _covered_by_ruleset(
@@ -623,10 +636,12 @@ def c8_ownership(cfg: Config) -> list[Finding]:
                     ),
                 )
             )
+        elif hidden is not None:
+            findings.append(_shadowed(f"{rel} is", rule, hidden, owners_rel))
 
     for category in cfg.categories:
         probe = f"{cfg.root}/{category}/_probe.md"
-        rule = codeowners.owners_for(rules, probe)
+        rule, hidden = codeowners.shadowed(rules, probe)
         if rule is None or not rule.owners:
             problem = Finding(
                 "C8",
@@ -635,6 +650,8 @@ def c8_ownership(cfg: Config) -> list[Finding]:
                 "sidecars would require no review",
                 owners_rel,
             )
+        elif hidden is not None:
+            problem = _shadowed(f"category '{category}' is", rule, hidden, owners_rel)
         elif not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
             problem = Finding(
                 "C8",
