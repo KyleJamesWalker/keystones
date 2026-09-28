@@ -93,6 +93,11 @@ def leader_for(path: str) -> str | None:
     parsed = adapters.for_path(path, allow_fallback=False)
     if parsed is not None:
         return parsed.comment_prefix(path)
+    return extension_leader(path)
+
+
+def extension_leader(path: str) -> str | None:
+    """The leader by file name alone, for a parser that declares none."""
     name = path.rsplit("/", 1)[-1]
     if name in _LEADER_BY_NAME:
         return _LEADER_BY_NAME[name]
