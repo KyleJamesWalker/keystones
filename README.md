@@ -33,7 +33,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/KyleJamesWalker/keystones
-    rev: v0.3.0
+    rev: v0.4.0
     hooks:
       - id: keystones          # staged text files, warns on drift
       - id: keystones-all      # whole repo, blocking
@@ -549,7 +549,7 @@ Phase 2 in progress.
 
 | Shipped | Not yet |
 |---|---|
-| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness, C13 hasher mismatch, C14 hash kind, C16 disabled test | call-closure advisory |
+| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness, C13 hasher mismatch, C14 hash kind, C16 disabled test, C17 twin drift, C18 unreviewed path | call-closure advisory |
 | `check`, `fix`, `add`, `doctor`, `list`, `index`, `migrate` | CI-written `reviewed_by` |
 
 What each check catches, where it runs and how to clear it is in
