@@ -557,6 +557,37 @@ interior separators are kept, so `a + b` and `a - b` differ, and so do `[a,,b]`
 and `[a,b]`. The `export` keyword and a `const`/`let`/`var` binding are inside
 the hash, so un-exporting a symbol is a change.
 
+### Upgrading
+
+Every release that moves a hasher, and this one moves three, needs one
+`keystones migrate` per repo after upgrading. It rewrites each entry whose
+recorded hasher differs from the installed one, proving the move from the
+stored source, and records the current hasher id. A recorded id that differs
+while the hashes still agree passes `check` silently by design; `migrate` is
+what refreshes it, so put `keystones migrate --check` next to `check --all` in
+CI to see drift in recorded ids before it matters.
+
+### What a hash does not see
+
+- A Python docstring is part of the AST, so editing one is C3.
+- Test data held in a module-level name, `@pytest.mark.parametrize("x", CASES)`
+  with `CASES` defined above, sits outside the test's hash. Name it in
+  `depends` (`tests/test_x.py::CASES`).
+- A guard used through a module-level instance (`guard = Guard()`) is keystoned
+  on its definition; rebinding the instance passes. Keystone the binding too.
+- SQL function-name case is inside the hash (`COALESCE` and `coalesce`
+  differ). Quoted identifiers are always exact.
+- A twin is compared on the whole semantic hash, docstrings included, and a CTE
+  twin must keep the same CTE name because the rendering includes `name AS`.
+- A dependent's sidecar stores no dependency source; its diff shows only
+  `depends_hash` moving.
+- Removing a twin or a dependency from a sidecar is an edit to that sidecar,
+  which CODEOWNERS already puts in front of the owner.
+
+One extension has one language table repo-wide, so a repo holding two SQL
+dialects side by side picks one grammar for `.sql`; a second extension, such as
+`.bqsql`, takes the other.
+
 ## Status
 
 Phase 2 in progress.

@@ -820,37 +820,6 @@ def stale_report(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
     return findings
 
 
-def hasher_mismatch(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
-    """Reported on its own, never as C3.
-
-    A stored hash produced by a different serializer or grammar version says
-    nothing about whether the code changed, so failing it as drift would send
-    people to `fix` and rubber-stamp a real review.
-    """
-    from keystones import adapters
-
-    out = []
-    for entry in sorted(entry_list, key=lambda e: e.id):
-        rel = entry.target.split("::")[0].split("#")[0]
-        if adapters.needs_extra(rel):
-            continue
-        adapter = adapters.for_path(rel)
-        expected = adapters.hasher_id(adapter, entry.target)
-        if entry.hasher and entry.hasher != expected:
-            out.append(
-                Finding(
-                    "C13",
-                    Severity.ERROR,
-                    f"keystone '{entry.id}' was hashed by {entry.hasher} but this "
-                    f"install uses {expected}, so C3, C4 and C5 cannot verify "
-                    "it at all. Run `keystones migrate` to prove it across, or "
-                    "install the matching extra.",
-                    entry.path,
-                )
-            )
-    return out
-
-
 def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
     """A second definition of the same name lets a decoy sit under the marker.
 
