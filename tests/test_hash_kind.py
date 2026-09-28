@@ -99,7 +99,7 @@ def _entry(**over) -> Entry:
         category="finance",
         target="m.sql#L2-L3",
         hash="text",
-        hasher="keystones-text/2",
+        hasher="keystones-text/3",
         semantic="sha256:a",
         text="sha256:a",
     )
@@ -162,7 +162,7 @@ def test_an_unreadable_file_with_hash_text_just_works(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
     sidecar = (repo / "keystones" / "finance" / "rev-rec.md").read_text()
     assert 'hash = "text"' in sidecar
-    assert 'hasher = "keystones-text/2"' in sidecar
+    assert 'hasher = "keystones-text/3"' in sidecar
 
 
 @needs_extra
@@ -288,7 +288,7 @@ def test_a_region_in_a_parsed_file_records_the_text_basis(repo, run_cli):
     assert run_cli("add", "--id", "rev", "-m", "Rev.") == 0
     sidecar = (repo / "keystones" / "finance" / "rev.md").read_text()
     assert 'hash = "text"' in sidecar
-    assert 'hasher = "keystones-text/2"' in sidecar
+    assert 'hasher = "keystones-text/3"' in sidecar
     assert run_cli("check", "--all", "--no-base") == 0
 
 

@@ -17,7 +17,7 @@ from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
 from keystones.models import Marker, Scope, Target
 
-HASHER_ID = "keystones-text/2"
+HASHER_ID = "keystones-text/3"
 
 # Line-comment leaders for types no parser claims. A type not listed hashes
 # every line, because guessing wrong would drop code from the hash.
@@ -107,10 +107,38 @@ def extension_leader(path: str) -> str | None:
     )
 
 
+# Leaders whose languages also write `/* */` block comments.
+_BLOCK_COMMENT_LEADERS = ("--", "//")
+
+
 def _without_comments(lines: list[str], leader: str | None) -> list[str]:
+    """Whole-line comments out: `leader` lines, and for languages that have
+    them, lines wholly inside a `/* */` block."""
     if leader is None:
         return lines
-    return [line for line in lines if not line.lstrip().startswith(leader)]
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        stripped = line.strip()
+        if inside:
+            if "*/" in stripped:
+                inside = False
+                rest = stripped.split("*/", 1)[1].strip()
+                if rest:
+                    out.append(rest)
+            continue
+        if stripped.startswith(leader):
+            continue
+        if leader in _BLOCK_COMMENT_LEADERS and stripped.startswith("/*"):
+            if "*/" in stripped:
+                rest = stripped.split("*/", 1)[1].strip()
+                if rest:
+                    out.append(rest)
+            else:
+                inside = True
+            continue
+        out.append(line)
+    return out
 
 
 def _without_markers(lines: list[str]) -> list[str]:

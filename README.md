@@ -391,7 +391,7 @@ move that file's hash basis and report drift on code nobody touched.
 ```toml
 target = "models/revenue.sql#L5-L5"
 hash   = "text"
-hasher = "keystones-text/2"
+hasher = "keystones-text/3"
 ```
 
 `hash` is the choice a person made and does not move. `hasher` is the exact

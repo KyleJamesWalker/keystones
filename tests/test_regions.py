@@ -290,3 +290,25 @@ def test_a_moved_region_whose_body_changed_says_changed(infra, run_cli, capsys):
     err = capsys.readouterr().err
     assert "[C3] keystone 'vpc-peering-cidrs' changed" in err
     assert "no longer covers" not in err
+
+
+def test_a_block_comment_edit_inside_a_sql_region_is_c4(repo, run_cli, capsys):
+    """Only `--` lines were comments to the text hasher; `/* */` was code."""
+    (repo / "q.ddl").write_text(
+        "-- keystone:start: q\n/* the contract\n   with billing */\nselect 1 as x\n"
+        "-- keystone:end\n"
+    )
+    assert run_cli("add", "--id", "q", "-m", "why.") == 0
+    path = repo / "q.ddl"
+    path.write_text(path.read_text().replace("with billing", "with finance"))
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C4]" in err and "[C3]" not in err
+
+
+def test_a_text_two_region_migrates_to_text_three(infra, run_cli):
+    path = infra / "keystones" / "infra" / "vpc-peering-cidrs.md"
+    path.write_text(path.read_text().replace("keystones-text/3", "keystones-text/3"))
+    assert run_cli("migrate") == 0
+    assert "keystones-text/3" in path.read_text()
