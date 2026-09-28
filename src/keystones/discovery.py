@@ -53,6 +53,31 @@ def _readable(path: Path, cap: int = MAX_SCAN_BYTES) -> str | None:
         return None
 
 
+def unparseable(cfg: Config) -> list[tuple[str, str]]:
+    """Every file a parser claims but cannot read, with the parser's first error.
+
+    Reads files with no marker too, since the point is to find the spellings
+    to shape before a marker goes in.
+    """
+    out: list[tuple[str, str]] = []
+    for rel in _tracked_files(cfg.repo_root):
+        if cfg.is_excluded(rel) or adapters.needs_extra(rel):
+            continue
+        adapter = adapters.for_path(rel, allow_fallback=False)
+        if adapter is None:
+            continue
+        src = _readable(cfg.repo_root / rel, cfg.max_scan_bytes)
+        if src is None:
+            continue
+        try:
+            adapter.markers(rel, src)
+        except SyntaxError as exc:
+            out.append((rel, f"line {exc.lineno}: {exc.msg}"))
+        except (ResolutionError, RegionError, MarkerError) as exc:
+            out.append((rel, str(exc).splitlines()[0]))
+    return out
+
+
 def unread(cfg: Config) -> list[str]:
     """Tracked files over the cap, which a scan never opens."""
     out = []

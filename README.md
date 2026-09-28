@@ -535,6 +535,10 @@ thing and nothing is said. Only when the two genuinely disagree does it surface,
 and then as a hasher mismatch rather than as code drift, because from there it
 is not possible to tell a moved basis from changed code.
 
+`keystones list --unparseable` prints every file a parser claims but cannot
+read, with the parser's first error, marker or not. Run it before adopting a
+repo to see which spellings to shape, or which files want `hash=text`.
+
 `keystones fix` refuses to write from an environment whose hasher differs from
 the one an entry records. Without that, running `fix` with the wrong grammar
 pack installed would store a hash CI cannot reproduce, and the next check would

@@ -159,3 +159,14 @@ def test_history_separates_the_note_from_the_author(repo, run_cli):
     text = (repo / "keystones" / "finance" / "payout-rounding.md").read_text()
     assert "- banker rounding per policy. (Test User)" in text
     assert "initial keystone (Test User)" in text
+
+
+def test_list_unparseable_names_each_file_with_its_first_error(repo, run_cli, capsys):
+    """The cheapest way to find the next spelling a grammar cannot read."""
+    (repo / "bad.py").write_text("def f(:\n    pass\n")
+    (repo / "good.py").write_text("def g():\n    return 1\n")
+    assert run_cli("list", "--unparseable") == 0
+    out = capsys.readouterr().out
+    assert "bad.py" in out and "line 1" in out
+    assert "good.py" not in out
+    assert "1 file(s)" in out

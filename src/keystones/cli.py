@@ -1025,6 +1025,15 @@ def cmd_migrate(args, cfg: Config) -> int:
 def cmd_list(args, cfg: Config) -> int:
     from keystones.staleness import DurationError, age, humanize, parse_duration
 
+    if args.unparseable:
+        from keystones.discovery import unparseable
+
+        broken = unparseable(cfg)
+        for rel, why in broken:
+            print(f"{rel}: {why}")
+        print(f"\n{len(broken)} file(s) a parser claims but cannot read")
+        return 0
+
     entries = _entries(cfg)
     if args.category:
         entries = [e for e in entries if e.category == args.category]
@@ -1156,6 +1165,11 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list", help="show every keystone")
     listing.add_argument("--category")
     listing.add_argument("--stale", action="store_true", help="only overdue keystones")
+    listing.add_argument(
+        "--unparseable",
+        action="store_true",
+        help="files a parser claims but cannot read, with the first error",
+    )
     listing.set_defaults(func=cmd_list)
 
     index = sub.add_parser("index", help="regenerate INDEX.md")
