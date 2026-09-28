@@ -391,3 +391,26 @@ def test_a_generated_name_can_be_opted_back_in(repo, run_cli):
     (repo / "uv.lock").write_text("# keystone(file): lock\nversion = 1\n")
     assert run_cli("add", "--id", "lock", "-m", "Pinned deps.") == 0
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- discovery cost ------------------------------------------------------------
+
+
+def test_a_parsed_file_without_the_word_is_never_parsed(repo, run_cli, monkeypatch):
+    """With a parser plugin, parsing every matching file dominated the run and
+    one template that hung the parser stalled the whole gate."""
+    from keystones.adapters import python as python_adapter
+
+    parsed: list[str] = []
+    original = python_adapter.markers
+
+    def counting(path, src):
+        parsed.append(path)
+        return original(path, src)
+
+    monkeypatch.setattr(python_adapter, "markers", counting)
+    (repo / "quiet.py").write_text("def q():\n    return 1\n")
+    (repo / "marked.py").write_text("# keystone: m\ndef m():\n    return 1\n")
+    assert run_cli("check", "--all", "--no-base") == 1  # C1 for the marker
+    assert "marked.py" in parsed
+    assert "quiet.py" not in parsed

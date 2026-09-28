@@ -71,11 +71,10 @@ def unread(cfg: Config) -> list[str]:
 def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
     """Every file type is in scope now that a fallback adapter exists.
 
-    Parsed extensions are always considered. Everything else is included only
-    when the word appears in it, which keeps a whole-repo scan cheap.
+    A file is included only when the marker word appears in it, which keeps a
+    whole-repo scan to a read per file and a parse per marked file.
     """
     candidates = paths if paths is not None else _tracked_files(cfg.repo_root)
-    parsed = adapters.parsed_extensions()
     out = []
     sidecars = f"{cfg.root.strip('/')}/"
     for rel in candidates:
@@ -84,11 +83,8 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
         full = cfg.repo_root / rel
         if not full.is_file():
             continue
-        # A named file with no marker in it has nothing to resolve, so only a
-        # whole-repo scan pays to parse one.
-        if rel.endswith(parsed) and paths is None:
-            out.append(rel)
-            continue
+        # A file with no marker in it has nothing to resolve, whatever its
+        # parser, and parsing it is where a whole-repo run spends its time.
         text = _readable(full, cfg.max_scan_bytes)
         if text is not None and marker_grammar.looks_like_a_marker(text):
             out.append(rel)
