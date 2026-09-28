@@ -181,6 +181,8 @@ def scan(
             except (RegionError, MarkerError) as exc:
                 findings.append(Finding("marker", Severity.ERROR, f"{rel}: {exc}", rel))
                 continue
+        if readable and preferred is not fallback:
+            findings += _not_comments(rel, src, found, set(probes.values()))
         for marker in found:
             try:
                 adapter = _adapter_for(rel, marker, preferred, readable, why)
@@ -214,6 +216,37 @@ def scan(
                 Resolved(marker, target, adapter)
             )
     return resolved, pending, findings, skipped
+
+
+def _not_comments(
+    rel: str, src: str, found: list[Marker], pending: set[int]
+) -> list[Finding]:
+    """Marker-shaped lines the lexer did not see as comments: a marker inside a
+    string literal attaches to nothing, and saying so beats silence."""
+    if marker_grammar.is_ignored(src):
+        return []
+    seen = {m.lineno for m in found} | pending
+    out = []
+    for lineno, raw in enumerate(marker_grammar.split_lines(src), start=1):
+        line = raw.rstrip("\r\n")
+        if lineno in seen or not marker_grammar.is_marker(line):
+            continue
+        if not marker_grammar.parse_point(line, rel, lineno) and not (
+            marker_grammar.parse_region_start(line, rel, lineno)
+        ):
+            continue
+        out.append(
+            Finding(
+                "marker",
+                Severity.WARNING,
+                f"{rel}:{lineno}: looks like a keystone marker but is not a "
+                "comment, so it attaches to nothing. Move it into a comment, or "
+                "add `keystones: ignore-file` if it is only an example.",
+                rel,
+                lineno,
+            )
+        )
+    return out
 
 
 def _adapter_for(rel: str, marker: Marker, preferred, readable: bool, why: str = ""):
