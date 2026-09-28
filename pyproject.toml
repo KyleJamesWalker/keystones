@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "keystones"
-dynamic = ["version"]
+version = "0.5.0"
 description = "Require SME review of load-bearing code by pinning a review gate to an AST node"
 readme = "README.md"
 license = "MIT"
@@ -54,12 +54,6 @@ dev = [
     "tree-sitter-language-pack==1.20.0",
     "pyyaml==6.0.3",
 ]
-
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/keystones/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/keystones"]

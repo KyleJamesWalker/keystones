@@ -40,6 +40,12 @@ repos:
         additional_dependencies: ["tree-sitter-language-pack==1.20.0"]
 ```
 
+A hook installs from the pinned `rev`, which pre-commit fetches without tags,
+so the package carries a static version that the release tag must match; a
+plugin in `additional_dependencies` resolves against it. Until you are on a
+release that carries one, a `repo: local` hook running `keystones` from your
+own environment is the supported route for plugins.
+
 **Pin the grammar pack in your own config, not via this package.** The hooks run
 in an environment pre-commit builds for them, so `additional_dependencies` fixes
 the grammar version for your repo without colliding with anything your project
