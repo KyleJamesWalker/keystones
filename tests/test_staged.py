@@ -206,3 +206,32 @@ def test_findings_are_not_repeated_across_staged_paths(gated, run_cli, capsys):
     path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
     assert run_cli("check", PAYOUT, SIDECAR) == 1
     assert capsys.readouterr().err.count("[C3]") == 1
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["./billing/payout.py", "billing/../billing/payout.py", "ABS", "./billing"],
+)
+def test_path_spellings_are_normalised(gated, run_cli, capsys, spelling):
+    """`check ./a.py` gave a false C3 on every marker; `check .` was silent."""
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    given = str(path) if spelling == "ABS" else spelling
+    assert run_cli("check", given) == 1
+    err = capsys.readouterr().err
+    assert "[C3] keystone 'payout-rounding' changed" in err
+    assert "no longer covers" not in err
+
+
+def test_the_repo_root_itself_is_every_tracked_file(gated, run_cli, capsys):
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    assert run_cli("check", ".") == 1
+    assert "[C3]" in capsys.readouterr().err
+
+
+def test_a_path_outside_the_repo_is_an_error(gated, run_cli, capsys, tmp_path):
+    outside = tmp_path.parent / "elsewhere.py"
+    outside.write_text("x = 1\n")
+    assert run_cli("check", str(outside)) == 1
+    assert "outside the repository" in capsys.readouterr().err

@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import datetime
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -95,6 +96,33 @@ def _staged_entries(
     return entries, findings
 
 
+def _normalise(cfg: Config, paths: list[str]) -> tuple[list[str], list[Finding]]:
+    """Every spelling of a path as its repo-relative POSIX form.
+
+    `./a.py`, `a/../a.py` and an absolute path all name the same file, and a
+    marker's path in a sidecar is the relative one.
+    """
+    out: list[str] = []
+    findings: list[Finding] = []
+    root = cfg.repo_root.resolve()
+    for given in paths:
+        full = pathlib.Path(given)
+        if not full.is_absolute():
+            # A hook runs from the repo root and names files by it; a person
+            # elsewhere may name one by the working directory instead.
+            from_root = cfg.repo_root / full
+            full = from_root if from_root.exists() else pathlib.Path.cwd() / full
+        try:
+            rel = full.resolve().relative_to(root).as_posix()
+        except ValueError:
+            findings.append(
+                Finding("path", Severity.ERROR, f"{given} is outside the repository")
+            )
+            continue
+        out.append("" if rel == "." else rel)
+    return out, findings
+
+
 def _expand_directories(cfg: Config, paths: list[str]) -> list[str]:
     """A directory stands for the tracked files under it."""
     from keystones.discovery import _tracked_files
@@ -102,6 +130,9 @@ def _expand_directories(cfg: Config, paths: list[str]) -> list[str]:
     out: list[str] = []
     tracked = None
     for rel in paths:
+        if rel == "":
+            out += _tracked_files(cfg.repo_root)
+            continue
         if (cfg.repo_root / rel).is_dir():
             tracked = _tracked_files(cfg.repo_root) if tracked is None else tracked
             prefix = rel.rstrip("/") + "/"
@@ -120,8 +151,10 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
         c17_twins,
     )
 
+    paths, findings = _normalise(cfg, paths)
     paths = _expand_directories(cfg, paths)
-    staged, findings = _staged_entries(cfg, paths)
+    staged, more = _staged_entries(cfg, paths)
+    findings += more
     for rel in paths:
         if not (cfg.repo_root / rel).exists():
             findings.append(
