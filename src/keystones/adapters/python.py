@@ -346,14 +346,43 @@ def _statements(body: list[ast.stmt], guard: str = ""):
             yield node, guard
 
 
-def _arguments(expr: ast.AST) -> str:
+def _module_values(tree: ast.Module) -> dict[str, str]:
+    """Module-level names to the source of what they are bound to."""
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            if isinstance(node.targets[0], ast.Name):
+                out[node.targets[0].id] = ast.unparse(node.value)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            out[node.target.id] = ast.unparse(node.value)
+    return out
+
+
+def _arguments(expr: ast.AST, values: dict[str, str] | None = None) -> str:
     """The call's arguments as written, so `skipif(True)` and `skipif(False)`
-    do not read alike. Empty for a bare mark."""
+    do not read alike, plus the source of any module-level name they use, so
+    `skipif(SKIP)` moves when `SKIP` does. Empty for a bare mark."""
     if not isinstance(expr, ast.Call):
         return ""
     parts = [ast.unparse(a) for a in expr.args]
     parts += [f"{k.arg}={ast.unparse(k.value)}" for k in expr.keywords]
-    return f"({', '.join(parts)})"
+    text = f"({', '.join(parts)})"
+    if values:
+        used = sorted(
+            {
+                n.id
+                for a in [*expr.args, *[k.value for k in expr.keywords]]
+                for n in ast.walk(a)
+                if isinstance(n, ast.Name) and n.id in values
+            }
+        )
+        if used:
+            text += " [" + ", ".join(f"{n}={values[n]}" for n in used) + "]"
+    return text
 
 
 def _dotted(expr: ast.AST) -> str | None:
@@ -392,6 +421,7 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
         return []
     imports = _imports(tree)
     calls = _call_aliases(tree)
+    values = _module_values(tree)
     wanted = DISABLERS | set(extra)
     found: list[str] = []
 
@@ -408,7 +438,7 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
             if name and any(name == w or name.endswith(f".{w}") for w in wanted):
                 # A bare name may stand for a call made at module level.
                 call = calls.get(expr.id) if isinstance(expr, ast.Name) else expr
-                found.append(f"{name}{_arguments(call)} on {where}")
+                found.append(f"{name}{_arguments(call, values)} on {where}")
 
     def switches(body: list[ast.stmt], where: str) -> None:
         for name, node in _assignments(body):
@@ -420,7 +450,8 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
             if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 name = resolved(node.value)
                 if name in MODULE_SKIPS:
-                    found.append(f"{name}{_arguments(node.value)} {where}{guard}")
+                    call = _arguments(node.value, values)
+                    found.append(f"{name}{call} {where}{guard}")
             # `TestX.__test__ = False` written after the class.
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target, value = node.targets[0], node.value
@@ -436,12 +467,17 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
                     )
 
     # The function's own decorators are inside its hash, except through an
-    # alias: `@off` hashes as the name, and the mark behind it lives outside.
+    # alias: `@off` hashes as the name, and whatever the name is bound to
+    # lives outside. Every module-level alias is recorded, since a harmless
+    # one can be rebound to a skip.
     for expr in node.decorator_list:
-        if isinstance(expr, ast.Name) and expr.id in calls:
-            name = resolved(calls[expr.id])
-            if name and any(name == w or name.endswith(f".{w}") for w in wanted):
-                found.append(f"{name}{_arguments(calls[expr.id])} on {qualname}")
+        if not isinstance(expr, ast.Name) or expr.id not in values:
+            continue
+        bound = calls.get(expr.id, expr)
+        name = resolved(bound) if expr.id in calls else imports.get(expr.id)
+        if name is None:
+            name = values[expr.id]
+        found.append(f"{name}{_arguments(bound, values)} via {expr.id} on {qualname}")
     parts = qualname.split(".")
     for depth in range(len(parts) - 1, 0, -1):
         prefix = ".".join(parts[:depth])

@@ -242,3 +242,33 @@ def test_ast_warnings_in_a_keystoned_file_stay_quiet(repo, run_cli, recwarn):
     run_cli("add", "--id", "p", "-m", "w")
     run_cli("check", "--all", "--no-base")
     assert not [w for w in recwarn if issubclass(w.category, SyntaxWarning)]
+
+
+def test_a_condition_held_in_a_module_name_is_part_of_the_mark(
+    guarded, run_cli, capsys
+):
+    edit(guarded, "import pytest\n", "import pytest\n\nSKIP = False\n")
+    edit(
+        guarded,
+        "class TestRounding:",
+        "@pytest.mark.skipif(SKIP, reason='r')\nclass TestRounding:",
+    )
+    assert run_cli("fix", "--id", "guard", "-m", "Guarded by a flag.") == 0
+    assert "SKIP=False" in (guarded / SIDECAR).read_text()
+    assert check(run_cli, capsys)[0] == 0
+    edit(guarded, "SKIP = False", "SKIP = True")
+    status, err = check(run_cli, capsys)
+    assert status == 1 and "[C16]" in err and "SKIP=True" in err
+
+
+def test_a_plain_alias_on_the_test_is_recorded_so_it_cannot_turn_into_a_skip(
+    guarded, run_cli, capsys
+):
+    edit(guarded, "import pytest\n", "import pytest\n\noff = pytest.mark.slow\n")
+    edit(guarded, "    def test_guard", "    @off\n    def test_guard")
+    assert run_cli("fix", "--id", "guard", "-m", "Marked slow.") == 0
+    assert "pytest.mark.slow via off" in (guarded / SIDECAR).read_text()
+    assert check(run_cli, capsys)[0] == 0
+    edit(guarded, "off = pytest.mark.slow", "off = pytest.mark.skip")
+    status, err = check(run_cli, capsys)
+    assert status == 1 and "[C16]" in err
