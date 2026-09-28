@@ -12,7 +12,7 @@ from pathlib import Path
 from keystones import adapters, dependencies, gitref, sidecar
 from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
-from keystones.checks import disablers, run_all
+from keystones.checks import disablers, oversized, run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect, scan
 from keystones.models import Entry, Finding, Marker, Scope, Severity
@@ -105,8 +105,26 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
         scoped=True,
         warn_only=args.warn_only,
     )
+    too_big, unread = oversized(cfg, list(entries.values()))
+    findings += too_big
+    for rel in paths:
+        full = cfg.repo_root / rel
+        if (
+            rel not in unread
+            and full.is_file()
+            and full.stat().st_size > cfg.max_scan_bytes
+        ):
+            findings.append(
+                Finding(
+                    "size",
+                    Severity.WARNING,
+                    f"{rel} is over max_scan_bytes ({cfg.max_scan_bytes}) and was "
+                    "not read; a keystone in it is checked only by `check --all`",
+                    rel,
+                )
+            )
     findings += c5_stored_source(staged)
-    findings += c2_orphan_entries(resolved, staged, skipped)
+    findings += c2_orphan_entries(resolved, staged, skipped | unread)
     if not resolved and not staged and not findings:
         return 0
     _report(findings, args.format or _default_format())
@@ -129,13 +147,16 @@ def cmd_check(args, cfg: Config) -> int:
                 file=sys.stderr,
             )
     resolved, findings, skipped = collect(cfg, None)
-    findings = findings + run_all(
+    entry_list = _entries(cfg)
+    too_big, unread = oversized(cfg, entry_list)
+    findings = findings + too_big
+    findings += run_all(
         cfg,
         resolved,
-        _entries(cfg),
+        entry_list,
         warn_only=args.warn_only,
         base=base,
-        skipped=skipped,
+        skipped=skipped | unread,
     )
     _report(findings, args.format or _default_format())
     errors = [f for f in findings if f.severity is Severity.ERROR]
@@ -610,6 +631,15 @@ def cmd_add(args, cfg: Config) -> int:
     path = cfg.repo_root / rel
     if not path.is_file():
         print(f"keystones: no such file {rel}", file=sys.stderr)
+        return 1
+    if path.stat().st_size > cfg.max_scan_bytes:
+        print(
+            f"keystones: {rel} is {path.stat().st_size} bytes, over "
+            f"max_scan_bytes ({cfg.max_scan_bytes}), so check would never read "
+            "it. Raise [tool.keystones] max_scan_bytes, or keystone a smaller "
+            "file.",
+            file=sys.stderr,
+        )
         return 1
     pattern = cfg.unreviewed_by(rel)
     if pattern is not None:

@@ -181,7 +181,9 @@ exclude = ["**/generated/**"]
 `.git`, `node_modules`, `vendor` and `generated` directories, lockfiles such as
 `package-lock.json` and `uv.lock`, and minified assets are never scanned, so a
 dependency bump costs the staged hook nothing. `include = ["uv.lock"]` opts a
-generated file back in.
+generated file back in. A file over `max_scan_bytes` (2 MB by default) is never
+read either; `add` refuses one, and a keystone whose file grew past the cap is
+reported rather than passed unread.
 
 One sidecar file per keystone, inside a per-category directory, so each category
 gets its own reviewers and two concurrent changes can never conflict:

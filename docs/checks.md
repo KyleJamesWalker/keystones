@@ -76,4 +76,5 @@ run one.
 | `resolve` | The marker attaches to nothing, or its target cannot be hashed. | Move the marker above a definition, or use a region. |
 | `plugin` | A preprocessor or parser plugin broke its contract, for example by changing the line count. | A plugin bug; report it to the plugin. |
 | `sidecar` | A staged sidecar cannot be parsed. | Restore the sidecar's `toml` block. |
+| `size` | A keystone's file is over `max_scan_bytes`, so it was not read. | Raise `[tool.keystones] max_scan_bytes`, or keystone a smaller file. |
 | `doctor` | `keystones doctor` found protection that does not require owner review. Only that command raises it. | Change branch protection or the ruleset; the message says which setting. |

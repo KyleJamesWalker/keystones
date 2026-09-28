@@ -375,10 +375,10 @@ def test_generated_files_are_never_read(repo, run_cli, monkeypatch, name):
 
     original = discovery._readable
 
-    def never(p):
+    def never(p, *args):
         if p == path:
             raise AssertionError(f"read {p.name}")
-        return original(p)
+        return original(p, *args)
 
     monkeypatch.setattr(discovery, "_readable", never)
     assert run_cli("check", name) == 0

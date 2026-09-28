@@ -43,10 +43,10 @@ def _tracked_files(repo_root: Path) -> list[str]:
 MAX_SCAN_BYTES = 2_000_000
 
 
-def _readable(path: Path) -> str | None:
+def _readable(path: Path, cap: int = MAX_SCAN_BYTES) -> str | None:
     """Skip binaries and anything too large to be hand-annotated."""
     try:
-        if path.stat().st_size > MAX_SCAN_BYTES:
+        if path.stat().st_size > cap:
             return None
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -74,7 +74,7 @@ def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
         if rel.endswith(parsed) and paths is None:
             out.append(rel)
             continue
-        text = _readable(full)
+        text = _readable(full, cfg.max_scan_bytes)
         if text is not None and marker_grammar.looks_like_a_marker(text):
             out.append(rel)
     return sorted(out)
@@ -125,7 +125,7 @@ def scan(
         preferred = adapters.for_path(rel)
         if preferred is None:
             continue
-        src = _readable(cfg.repo_root / rel)
+        src = _readable(cfg.repo_root / rel, cfg.max_scan_bytes)
         if src is None:
             continue
         src, probes = marker_grammar.probe_pending(src)

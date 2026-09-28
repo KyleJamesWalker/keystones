@@ -145,6 +145,8 @@ class Config:
     unreviewed: tuple[str, ...] = ()
     # Generated files to scan after all, by pattern; overrides the built-in list.
     include: tuple[str, ...] = ()
+    # A file larger than this is never read; a keystone in one is reported.
+    max_scan_bytes: int = 2_000_000
 
     @property
     def sidecar_root(self) -> Path:
@@ -514,6 +516,9 @@ def load(repo_root: Path | None = None) -> Config:
             isinstance(v, str) and v for v in value
         ):
             raise ConfigError(f"tool.keystones.{key} must be a list of path patterns")
+    cap = data.get("max_scan_bytes", 2_000_000)
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0:
+        raise ConfigError("tool.keystones.max_scan_bytes must be a positive integer")
     if "default" not in categories:
         categories = ("default", *categories)
     return Config(
@@ -526,4 +531,5 @@ def load(repo_root: Path | None = None) -> Config:
         disabling_decorators=tuple(disabling),
         unreviewed=tuple(data.get("unreviewed", [])),
         include=tuple(data.get("include", [])),
+        max_scan_bytes=cap,
     )

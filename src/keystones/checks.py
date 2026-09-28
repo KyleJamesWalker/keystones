@@ -400,6 +400,39 @@ def hasher_difference(recorded: str, expected: str) -> str:
     return "; ".join(notes) or "the ids differ in a way keystones cannot name"
 
 
+def oversized(cfg: Config, entry_list: list[Entry]) -> tuple[list[Finding], set[str]]:
+    """Entries whose target file is over the cap: reported, and kept out of C2.
+
+    A keystoned target must never pass because nobody read it.
+    """
+    findings: list[Finding] = []
+    paths: set[str] = set()
+    for entry in sorted(entry_list, key=lambda e: (e.category, e.id)):
+        rel = entry.target.split("::")[0].split("#")[0]
+        if rel in paths:
+            continue
+        full = cfg.repo_root / rel
+        try:
+            size = full.stat().st_size
+        except OSError:
+            continue
+        if size > cfg.max_scan_bytes:
+            paths.add(rel)
+            findings.append(
+                Finding(
+                    "size",
+                    Severity.ERROR,
+                    f"{rel} is {size} bytes, over max_scan_bytes "
+                    f"({cfg.max_scan_bytes}), so keystone '{entry.id}' in it was "
+                    "not checked. Raise [tool.keystones] max_scan_bytes, or move "
+                    "the keystone to a smaller file.",
+                    rel,
+                    owner_hint=entry.category,
+                )
+            )
+    return findings, paths
+
+
 def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
     from keystones import adapters
 
