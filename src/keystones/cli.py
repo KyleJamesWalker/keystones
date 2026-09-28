@@ -95,6 +95,22 @@ def _staged_entries(
     return entries, findings
 
 
+def _expand_directories(cfg: Config, paths: list[str]) -> list[str]:
+    """A directory stands for the tracked files under it."""
+    from keystones.discovery import _tracked_files
+
+    out: list[str] = []
+    tracked = None
+    for rel in paths:
+        if (cfg.repo_root / rel).is_dir():
+            tracked = _tracked_files(cfg.repo_root) if tracked is None else tracked
+            prefix = rel.rstrip("/") + "/"
+            out += [t for t in tracked if t.startswith(prefix)]
+        else:
+            out.append(rel)
+    return out
+
+
 def _check_paths(args, cfg: Config, paths: list[str]) -> int:
     """The staged hook: cost follows the files passed, not the size of the repo."""
     from keystones.checks import (
@@ -104,6 +120,7 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
         c17_twins,
     )
 
+    paths = _expand_directories(cfg, paths)
     staged, findings = _staged_entries(cfg, paths)
     for rel in paths:
         if not (cfg.repo_root / rel).exists():
