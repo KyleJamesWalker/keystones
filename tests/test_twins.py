@@ -254,3 +254,24 @@ def test_add_refuses_a_twin_that_does_not_match_the_existing_hash(
     assert run_cli("add", "--id", "p", "--twin", f"{COPY}::compute_payout") == 1
     assert "does not match" in capsys.readouterr().err
     assert (repo / "keystones" / "default" / "p.md").read_text() == before
+
+
+# --- a twin on another basis ---------------------------------------------------------
+
+
+def test_a_twin_the_keystones_basis_cannot_hash_is_c14_not_missing(
+    repo, run_cli, capsys
+):
+    """A basis mismatch is a configuration question, not a missing copy."""
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    (repo / "copy.yaml").write_text("x: 1\n")
+    sidecar = repo / "keystones" / "default" / "p.md"
+    sidecar.write_text(
+        sidecar.read_text().replace(
+            'hash = "python"', 'hash = "python"\ntwins = ["copy.yaml::x"]'
+        )
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C14]" in err and "copy.yaml" in err
+    assert "[C17]" not in err
