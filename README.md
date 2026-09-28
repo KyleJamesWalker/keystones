@@ -154,6 +154,11 @@ categories = ["default", "finance"]
 exclude = ["**/generated/**"]
 ```
 
+`.git`, `node_modules`, `vendor` and `generated` directories, lockfiles such as
+`package-lock.json` and `uv.lock`, and minified assets are never scanned, so a
+dependency bump costs the staged hook nothing. `include = ["uv.lock"]` opts a
+generated file back in.
+
 One sidecar file per keystone, inside a per-category directory, so each category
 gets its own reviewers and two concurrent changes can never conflict:
 

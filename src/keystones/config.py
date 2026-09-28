@@ -10,6 +10,38 @@ from pathlib import Path, PurePosixPath
 from keystones.preprocess import Refused
 
 DEFAULT_EXCLUDE_DIRS = (".git", "node_modules", "vendor", "generated")
+# Generated files that churn on every dependency bump and never carry a marker.
+# `include` in [tool.keystones] opts one back in.
+DEFAULT_EXCLUDE_FILES = (
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "bun.lockb",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "pdm.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "go.sum",
+    "flake.lock",
+    "packages.lock.json",
+)
+DEFAULT_EXCLUDE_SUFFIXES = (".min.js", ".min.css", ".map")
+
+
+def default_excluded(rel_path: str, include: tuple[str, ...] = ()) -> bool:
+    """The built-in excludes: directories, generated files and minified assets."""
+    parts = PurePosixPath(rel_path).parts
+    if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        return True
+    name = parts[-1] if parts else ""
+    generated = name in DEFAULT_EXCLUDE_FILES or name.endswith(DEFAULT_EXCLUDE_SUFFIXES)
+    return generated and _matches(rel_path, include) is None
+
 
 # What a builtin spec fixes; a table may only take one whole or declare its own.
 SPEC_SHAPE_KEYS = frozenset(
@@ -111,6 +143,8 @@ class Config:
     disabling_decorators: tuple[str, ...] = ()
     # Paths a bot rewrites with no pull request, where no gate can hold. See C18.
     unreviewed: tuple[str, ...] = ()
+    # Generated files to scan after all, by pattern; overrides the built-in list.
+    include: tuple[str, ...] = ()
 
     @property
     def sidecar_root(self) -> Path:
@@ -127,8 +161,7 @@ class Config:
         return self.sidecar_root / "INDEX.md"
 
     def is_excluded(self, rel_path: str) -> bool:
-        parts = PurePosixPath(rel_path).parts
-        if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        if default_excluded(rel_path, self.include):
             return True
         return _matches(rel_path, self.exclude) is not None
 
@@ -467,11 +500,12 @@ def load(repo_root: Path | None = None) -> Config:
         raise ConfigError(
             "tool.keystones.disabling_decorators must be a list of dotted names"
         )
-    unreviewed = data.get("unreviewed", [])
-    if not isinstance(unreviewed, list) or not all(
-        isinstance(u, str) and u for u in unreviewed
-    ):
-        raise ConfigError("tool.keystones.unreviewed must be a list of path patterns")
+    for key in ("unreviewed", "include"):
+        value = data.get(key, [])
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v for v in value
+        ):
+            raise ConfigError(f"tool.keystones.{key} must be a list of path patterns")
     if "default" not in categories:
         categories = ("default", *categories)
     return Config(
@@ -482,5 +516,6 @@ def load(repo_root: Path | None = None) -> Config:
         languages=_languages(data),
         codeowners_from_rulesets=from_rulesets,
         disabling_decorators=tuple(disabling),
-        unreviewed=tuple(unreviewed),
+        unreviewed=tuple(data.get("unreviewed", [])),
+        include=tuple(data.get("include", [])),
     )

@@ -359,3 +359,35 @@ def test_doctor_reports_an_unusable_token_rather_than_passing(tmp_path, monkeypa
     )
     findings = doctor.run(tmp_path)
     assert [f for f in findings if f.severity is Severity.ERROR]
+
+
+@pytest.mark.parametrize(
+    "name", ["package-lock.json", "uv.lock", "app/yarn.lock", "dist/app.min.js"]
+)
+def test_generated_files_are_never_read(repo, run_cli, monkeypatch, name):
+    """A lockfile churns on every dependency bump and never carries a marker,
+    so the staged hook must not pay to read it."""
+    from keystones import discovery
+
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# keystone(file): lock\n" + "x\n" * 10)
+
+    original = discovery._readable
+
+    def never(p):
+        if p == path:
+            raise AssertionError(f"read {p.name}")
+        return original(p)
+
+    monkeypatch.setattr(discovery, "_readable", never)
+    assert run_cli("check", name) == 0
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_generated_name_can_be_opted_back_in(repo, run_cli):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + 'include = ["uv.lock"]\n')
+    (repo / "uv.lock").write_text("# keystone(file): lock\nversion = 1\n")
+    assert run_cli("add", "--id", "lock", "-m", "Pinned deps.") == 0
+    assert run_cli("check", "--all", "--no-base") == 0

@@ -10,10 +10,10 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from keystones import adapters, gitref
-from keystones.config import DEFAULT_EXCLUDE_DIRS, Config
+from keystones.config import Config, default_excluded
 from keystones.models import Finding, Severity
 
 # (category, id), as in `<root>/<category>/<id>.md`.
@@ -27,10 +27,10 @@ class Inventory:
     entries: set[Key] = field(default_factory=set)
     categories: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    include: tuple[str, ...] = ()
 
     def excludes(self, rel_path: str) -> bool:
-        parts = PurePosixPath(rel_path).parts
-        if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        if default_excluded(rel_path, self.include):
             return True
         return any(
             fnmatch(rel_path, pat)
@@ -41,23 +41,28 @@ class Inventory:
 
 def _config_at(
     repo_root: Path, ref: str
-) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     raw = gitref.read_at(repo_root, ref, "pyproject.toml")
     if raw is None:
-        return "keystones", ("default",), ()
+        return "keystones", ("default",), (), ()
     try:
         data = tomllib.loads(raw).get("tool", {}).get("keystones", {})
     except tomllib.TOMLDecodeError:
-        return "keystones", ("default",), ()
+        return "keystones", ("default",), (), ()
     categories = tuple(data.get("categories", ["default"]))
     if "default" not in categories:
         categories = ("default", *categories)
-    return data.get("root", "keystones"), categories, tuple(data.get("exclude", []))
+    return (
+        data.get("root", "keystones"),
+        categories,
+        tuple(data.get("exclude", [])),
+        tuple(data.get("include", [])),
+    )
 
 
 def inventory_at(repo_root: Path, ref: str) -> Inventory:
-    root, categories, exclude = _config_at(repo_root, ref)
-    inv = Inventory(categories=categories, exclude=exclude)
+    root, categories, exclude, include = _config_at(repo_root, ref)
+    inv = Inventory(categories=categories, exclude=exclude, include=include)
     supported = adapters.supported_extensions()
 
     for rel in gitref.files_at(repo_root, ref):
@@ -91,6 +96,7 @@ def inventory_head(cfg: Config, resolved, entry_list) -> Inventory:
         entries={entry.key for entry in entry_list},
         categories=cfg.categories,
         exclude=cfg.exclude,
+        include=cfg.include,
     )
 
 
