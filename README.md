@@ -361,6 +361,22 @@ the gate, and a plugin may refuse a file it cannot handle safely rather than
 guess. A refusal is reported and points at `hash=text`; it never silently
 downgrades. See `keystones/preprocess.py` for the contract.
 
+SQL that a Python service fills in with `str.format` needs no plugin. One
+preprocessor ships with keystones and masks `{name}`-style placeholders:
+
+```toml
+[[tool.keystones.language]]
+builtin = "sql"
+extensions = [".sql"]
+preprocessor = "keystones.placeholders:preprocess"
+```
+
+A placeholder is hashed as written, so renaming `{rate}` to `{fee}` is a
+change. It masks to an identifier, so a placeholder where SQL wants a number,
+such as `limit {n}`, still does not parse. A file with `{{` or `}}` is refused,
+since those are an escape in `str.format` and Jinja in dbt. BigQuery's `@param`
+parameters are SQL already and need no mask.
+
 ### A parser the pack does not have, via a plugin
 
 A grammar pack covers common languages, not every dialect. A parser plugin
