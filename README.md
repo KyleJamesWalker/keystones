@@ -205,7 +205,8 @@ codeowners_from_rulesets = true
 ```
 
 C8 then accepts a `required_reviewers` rule whose file pattern covers a path
-that has no CODEOWNERS owner, and prints a notice naming the ruleset. It reads
+that has no CODEOWNERS owner, and prints a notice naming the ruleset. The rule
+names a team, never a user; write the pattern as `keystones/<category>/**`. It reads
 the rules with `GH_TOKEN`, `GITHUB_TOKEN` or, failing both, `gh auth token`;
 without any it warns and checks CODEOWNERS alone. Off by default, and with it
 off C8 reads only CODEOWNERS.

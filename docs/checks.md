@@ -54,6 +54,12 @@ GitHub API.
 | Neither covers it | the usual C8 error |
 | The rules cannot be read, for example with no token from the environment or `gh auth token` | warning, then CODEOWNERS alone decides |
 
+A `required_reviewers` rule names a team, never a user, so a path a ruleset
+covers is owned by that team. Its `file_patterns` are matched as fnmatch with
+`*` staying inside one path segment and `**` crossing segments; GitHub does not
+document the exact flags, and no live ruleset with the rule was available to
+confirm them, so a pattern such as `keystones/**` is the safe shape.
+
 ## Other findings
 
 These are not numbered checks. They mean keystones could not get far enough to
