@@ -91,20 +91,29 @@ def owners_for(rules: list[Rule], path: str) -> Rule | None:
     return shadowed(rules, path)[0]
 
 
-def _specificity(rule: Rule) -> tuple[int, int]:
+def _specificity(rule: Rule) -> tuple[int, int, int]:
+    """A literal path beats a glob; then deeper; then longer."""
     body = rule.pattern.strip("/")
-    return (body.count("/") + 1 if body else 0, len(body))
+    globbed = any(c in body for c in "*?")
+    return (0 if globbed else 1, body.count("/") + 1 if body else 0, len(body))
 
 
 def shadowed(rules: list[Rule], path: str) -> tuple[Rule | None, Rule | None]:
-    """The winning rule, and the more specific earlier rule it overrides.
+    """The winning rule, and the more specific earlier rule it takes the path
+    from, when the two name different owners.
 
-    A broad rule placed after a specific one takes the path away from the
-    owner the specific rule named, which reads as intended only by accident.
+    A broad rule placed after a specific one with other owners reassigns the
+    path in a way that reads as intended only by accident. The same owners
+    either way is a harmless overlap.
     """
     matching = [rule for rule in rules if rule.matches(path)]
     if not matching:
         return None, None
     winner = matching[-1]
-    hidden = [r for r in matching[:-1] if _specificity(r) > _specificity(winner)]
+    hidden = [
+        r
+        for r in matching[:-1]
+        if _specificity(r) > _specificity(winner)
+        and set(r.owners) != set(winner.owners)
+    ]
     return winner, (hidden[-1] if hidden else None)

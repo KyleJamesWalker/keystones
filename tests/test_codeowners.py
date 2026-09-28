@@ -235,3 +235,27 @@ def test_shadowing_is_reported_by_rule():
     winner, hidden = shadowed(rules, "keystones/default/x.md")
     assert (winner.lineno, hidden) == (2, None)
     assert shadowed(rules, "elsewhere/x") == (None, None)
+
+
+def test_a_later_glob_that_takes_a_category_is_c8(repo, run_cli, capsys):
+    """Broader by glob, not by depth: `/keystones/*/*.md` after
+    `/keystones/finance/` owns finance's sidecars."""
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/keystones/*/*.md    @org/other\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "category 'finance' is owned by '/keystones/*/*.md' (line 2)" in err
+
+
+def test_a_later_broader_rule_with_the_same_owner_is_fine(repo, run_cli):
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/eng\n"
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
