@@ -266,6 +266,16 @@ def audit(
     if rules_status == 401:
         findings.append(_rejected(rules_status))
         return report
+    if rules_status != 200:
+        findings.append(
+            Finding(
+                "doctor",
+                Severity.ERROR,
+                f"unexpected response reading the rules for '{branch}': "
+                f"HTTP {rules_status}",
+            )
+        )
+        return report
     rulesets: dict = {}
     rules = [
         (rule, _ruleset_label(owner, repo, rule, token, rulesets))

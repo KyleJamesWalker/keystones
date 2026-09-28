@@ -332,3 +332,13 @@ def test_required_reviewers_must_cover_every_category(repo, run_cli, api, capsys
     _required_reviewers_only(repo, api, ["keystones/finance/**"])
     assert run_cli("doctor") == 1
     assert "Code Owners" in capsys.readouterr().err
+
+
+def test_an_unreadable_rules_endpoint_is_reported_not_treated_as_no_rules(
+    tmp_path, api
+):
+    api["protection_status"] = 404
+    api["rules_status"] = 403
+    found = errors(doctor.run(tmp_path))
+    assert any("HTTP 403" in f.message for f in found)
+    assert not any("no protection and no ruleset" in f.message for f in found)
