@@ -399,10 +399,17 @@ def hasher_difference(recorded: str, expected: str) -> str:
                     f"{e_match['version']} is installed. {_PIN}"
                 )
             if r_match["rest"] != e_match["rest"]:
-                what = "spec" if r_family == "keystones-ts" else "options"
-                notes.append(
-                    f"the {name} {what} in [[tool.keystones.language]] changed"
-                )
+                r_rest, e_rest = r_match["rest"].strip("/"), e_match["rest"].strip("/")
+                if r_rest.startswith("render") and e_rest.startswith("render"):
+                    notes.append(
+                        f"{name}'s rendering moved from {r_rest} to {e_rest}; "
+                        "`keystones migrate` proves entries across"
+                    )
+                else:
+                    what = "spec" if r_family == "keystones-ts" else "options"
+                    notes.append(
+                        f"the {name} {what} in [[tool.keystones.language]] changed"
+                    )
             continue
         r_name, _, r_version = r_part.partition("/")
         e_name, _, e_version = e_part.partition("/")

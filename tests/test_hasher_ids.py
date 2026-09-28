@@ -46,3 +46,12 @@ def test_the_difference_is_named(recorded, expected, said):
 def test_a_pack_difference_says_how_to_pin():
     text = hasher_difference(TS, "keystones-ts/3+typescript@1.21.0/d9c21109b66f")
     assert "additional_dependencies" in text
+
+
+def test_a_plugin_rendering_bump_is_named_as_such():
+    text = hasher_difference(
+        "keystones-plugin/1+lkml@1.3.7/render1+x/1",
+        "keystones-plugin/1+lkml@1.3.7/render2+x/1",
+    )
+    assert "lkml's rendering moved from render1 to render2" in text
+    assert "keystones migrate" in text

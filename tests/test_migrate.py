@@ -137,3 +137,11 @@ def test_fix_refuses_to_write_from_a_mismatched_environment(
     assert "keystones-ast/0" in err and "keystones-ast/1" in err
     assert "migrate" in err
     assert 'hasher = "keystones-ast/0"' in sidecar_path(migrated_repo).read_text()
+
+
+def test_migrate_exits_non_zero_while_an_entry_stays_blocked(migrated_repo, run_cli):
+    set_hasher(migrated_repo, "keystones-ast/0")
+    path = migrated_repo / "billing" / "payout.py"
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    assert run_cli("migrate", "--check") == 1
+    assert run_cli("migrate") == 1
