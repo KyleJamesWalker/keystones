@@ -43,7 +43,7 @@ def configure(cfg) -> None:
                 extensions=lang.extensions,
                 parser=lang.parser,
                 preprocessor=lang.preprocessor,
-                line_comment=lang.line_comment or "#",
+                line_comment=lang.line_comment,
             )
             for lang in cfg.languages
             if lang.parser is not None

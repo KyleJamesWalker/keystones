@@ -26,7 +26,8 @@ class PluginSpec:
     extensions: tuple[str, ...]
     parser: ParserPlugin
     preprocessor: Preprocessor | None = None
-    line_comment: str = "#"
+    # None: the file type decides, so a dbt table on .sql writes `--` markers.
+    line_comment: str | None = None
 
 
 _BY_EXTENSION: dict[str, PluginSpec] = {}
@@ -203,4 +204,4 @@ def duplicate_qualnames(path: str, src: str) -> set[str]:
 
 
 def comment_prefix(path: str) -> str:
-    return spec_for(path).line_comment
+    return spec_for(path).line_comment or fallback.extension_leader(path) or "#"

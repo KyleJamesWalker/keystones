@@ -58,3 +58,13 @@ def test_a_path_outside_the_list_is_untouched(gitops, run_cli):
     (gitops / MIRROR).write_text("image: app:1\n")
     assert run_cli("add", "--id", "app", "-m", "Pinned image.") == 0
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_adopting_ignores_the_copy_under_the_list(gitops, run_cli, capsys):
+    """A bot mirror carries the same marker; only the reviewed file counts."""
+    (gitops / "app.yaml").write_text(BODY)
+    assert run_cli("add", "--id", "app", "-m", "Pinned image.") == 0, (
+        capsys.readouterr().err
+    )
+    sidecar = (gitops / "keystones" / "default" / "app.md").read_text()
+    assert 'target = "app.yaml"' in sidecar

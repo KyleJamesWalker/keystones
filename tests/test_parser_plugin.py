@@ -237,3 +237,25 @@ def test_a_plugin_extension_never_needs_the_tree_sitter_extra(repo):
     configure(repo, PARSER_TABLE.replace('".blk"', '".sql"'))
     adapters.configure(load(repo))
     assert adapters.needs_extra("x.sql") is False
+
+
+# --- the marker leader ------------------------------------------------------
+
+
+def test_a_plugin_on_sql_writes_sql_comments(repo):
+    """A dbt table names no line_comment, and `add` must not write `#` in SQL."""
+    configure(repo, PARSER_TABLE.replace('".blk"', '".sql"'))
+    adapters.configure(load(repo))
+    assert adapters.for_path("m.sql").comment_prefix("m.sql") == "--"
+
+
+def test_a_plugin_on_an_unknown_type_falls_back_to_hash(repo):
+    configure(repo, PARSER_TABLE)
+    adapters.configure(load(repo))
+    assert adapters.for_path("m.blk").comment_prefix("m.blk") == "#"
+
+
+def test_a_declared_line_comment_wins(repo):
+    configure(repo, PARSER_TABLE.replace('".blk"', '".sql"') + 'line_comment = "//"\n')
+    adapters.configure(load(repo))
+    assert adapters.for_path("m.sql").comment_prefix("m.sql") == "//"

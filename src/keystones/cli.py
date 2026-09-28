@@ -344,6 +344,18 @@ def _adopt(args, cfg: Config) -> int:
         if item.marker.id == keystone_id
         and wanted_category in ("", item.marker.category)
     ]
+    doomed = [m for m in match if cfg.unreviewed_by(m.marker.path)]
+    match = [m for m in match if m not in doomed]
+    if not match and doomed:
+        item = doomed[0]
+        print(
+            f"keystones: [C18] {item.marker.path} matches "
+            f"'{cfg.unreviewed_by(item.marker.path)}' in [tool.keystones] "
+            "unreviewed, so it is rewritten without review and no gate can hold "
+            "there.",
+            file=sys.stderr,
+        )
+        return 1
     if not match:
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
@@ -370,15 +382,6 @@ def _adopt(args, cfg: Config) -> int:
 
     item = match[0]
     category = item.marker.category
-    pattern = cfg.unreviewed_by(item.marker.path)
-    if pattern is not None:
-        print(
-            f"keystones: [C18] {item.marker.path} matches '{pattern}' in "
-            "[tool.keystones] unreviewed, so it is rewritten without review and "
-            "no gate can hold there.",
-            file=sys.stderr,
-        )
-        return 1
     if cfg.sidecar_path(category, keystone_id).exists():
         print(
             f"keystones: '{keystone_id}' already exists in {category}",
@@ -546,6 +549,26 @@ def _complete_pending(args, cfg: Config) -> int:
     return 0
 
 
+def _marker_on(adapter, rel: str, src: str, target, scope: Scope):
+    """The marker already sitting on this target, so `add` adopts, not doubles."""
+    try:
+        found = adapters.for_path(rel).markers(rel, src)
+    except Exception:
+        return None
+    for marker in found:
+        if marker.scope is not scope:
+            continue
+        if scope is Scope.FILE:
+            return marker
+        try:
+            resolved = adapter.resolve(src, marker)
+        except (ResolutionError, SyntaxError):
+            continue
+        if resolved.qualname == target.qualname:
+            return marker
+    return None
+
+
 def _file_scope_insert_line(src: str) -> int:
     """First line a comment may go on without breaking the file.
 
@@ -627,6 +650,22 @@ def cmd_add(args, cfg: Config) -> int:
         first = src.splitlines()[target.start - 1]
         insert_at = target.start
         indent = first[: len(first) - len(first.lstrip())]
+
+    existing = _marker_on(adapter, rel, src, target, scope)
+    if existing is not None:
+        if existing.key != (args.category, args.id):
+            print(
+                f"keystones: {rel}::{qualname or ''} already carries keystone "
+                f"'{existing.id}'; run `keystones add --id "
+                f"{existing.category}/{existing.id}` to adopt it, or remove "
+                "that marker first.",
+                file=sys.stderr,
+            )
+            return 1
+        return _adopt(
+            argparse.Namespace(**{**vars(args), "id": f"{args.category}/{args.id}"}),
+            cfg,
+        )
 
     try:
         # Resolved before the file is touched: an unresolvable spec used to
