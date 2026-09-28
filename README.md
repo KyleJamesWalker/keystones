@@ -286,6 +286,12 @@ reformat-immune.
 Whole-line comments inside a region are kept out of the semantic hash where the
 file type's comment leader is known, so editing one is [C4] and clears with a
 `fix` and no note. A type keystones cannot name a leader for hashes every line.
+A trailing comment on a code line is part of that line, so editing it is [C3].
+
+A region is found by its marker, not by the line range the sidecar records. An
+edit above it that shifts the range with the body unchanged passes with a
+notice, and `fix` records the new range without a note. A new comment line
+inside the region shifts the range and is [C4].
 
 ### YAML by meaning
 

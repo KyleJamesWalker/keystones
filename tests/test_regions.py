@@ -249,3 +249,33 @@ def test_a_region_hashed_before_comments_were_split_migrates_across(infra, run_c
 )
 def test_comment_leaders_by_file_type(path, leader):
     assert fallback.leader_for(path) == leader
+
+
+# --- a region that only moved ------------------------------------------------
+
+
+def test_a_region_that_only_moved_is_a_notice_not_drift(infra, run_cli, capsys):
+    """Every unrelated edit above a region shifts its lines; paging the owner
+    for that is what gets regions removed."""
+    edit_config(infra, "apiVersion: v1", "# added\n# lines\napiVersion: v1")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 0
+    err = capsys.readouterr().err
+    assert "notice: [C3] keystone 'vpc-peering-cidrs' moved" in err
+    assert "net.yaml#L7-L9" in err
+    assert "error" not in err
+
+
+def test_a_moved_region_whose_body_changed_is_still_c3(infra, run_cli, capsys):
+    edit_config(infra, "apiVersion: v1", "# added\napiVersion: v1")
+    edit_config(infra, "exportRoutes: true", "exportRoutes: false")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "error: [C3]" in capsys.readouterr().err
+
+
+def test_the_staged_hook_stays_quiet_on_a_pure_move(infra, run_cli, capsys):
+    edit_config(infra, "apiVersion: v1", "# added\napiVersion: v1")
+    capsys.readouterr()
+    assert run_cli("check", "--warn-only", "net.yaml") == 0
+    assert "error" not in capsys.readouterr().err

@@ -150,9 +150,41 @@ def c3_c4_hashes(
             f'run `keystones fix --id {ref(entry.key, shared)} -m "<why it changed>"`'
         )
 
+        # A region is found by its marker, so a range that shifted under an
+        # unrelated edit above it is not a different target.
+        shifted = (
+            item.target.region
+            and entry.target.split("#")[0] == item.marker.path
+            and "#L" in entry.target
+            and target != entry.target
+            and semantic == entry.semantic
+        )
+        if shifted and text == entry.text:
+            out.append(
+                Finding(
+                    "C3",
+                    Severity.NOTICE,
+                    f"keystone '{entry.id}' moved from {entry.target} to {target} "
+                    "with its body unchanged; `keystones fix` records the new "
+                    "range and needs no note",
+                    item.marker.path,
+                    item.marker.lineno,
+                )
+            )
+        elif shifted:
+            out.append(
+                Finding(
+                    "C4",
+                    severity,
+                    f"comments inside keystone '{entry.id}' changed, and it now "
+                    f"spans {target}. {fix_hint}",
+                    item.marker.path,
+                    item.marker.lineno,
+                )
+            )
         # Without this the marker can be moved onto a hash-identical decoy while
         # the real definition is rewritten, and every other check stays green.
-        if target != entry.target:
+        elif target != entry.target:
             out.append(
                 Finding(
                     "C3",
