@@ -157,6 +157,7 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
         full = cfg.repo_root / rel
         if (
             rel not in unread
+            and not cfg.is_excluded(rel)
             and full.is_file()
             and full.stat().st_size > cfg.max_scan_bytes
         ):
@@ -191,6 +192,11 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
     findings += c11_dependencies(cfg, list(linked.values()))
     findings += c17_twins(cfg, list(linked.values()))
     through = len(linked) - len(entries)
+    # One keystone can be reached through its file and its sidecar in one run.
+    unique: dict[tuple, Finding] = {}
+    for f in findings:
+        unique.setdefault((f.check, f.path, f.lineno, f.message), f)
+    findings = list(unique.values())
     if not resolved and not staged and not findings:
         if through:
             print(f"keystones: {through} keystone(s) verified through twins or depends")
@@ -548,6 +554,20 @@ def _adopt(args, cfg: Config) -> int:
 
     item = match[0]
     category = item.marker.category
+    if item.target.qualname is not None:
+        src = (cfg.repo_root / item.marker.path).read_text()
+        try:
+            dupes = item.adapter.duplicate_qualnames(item.marker.path, src)
+        except Exception:
+            dupes = set()
+        if item.target.qualname in dupes:
+            print(
+                f"keystones: {item.marker.path} defines '{item.target.qualname}' "
+                "more than once, so a keystone on it cannot say which one it "
+                "protects. Rename one of them first.",
+                file=sys.stderr,
+            )
+            return 1
     # A problem in the target's own file blocks; one elsewhere is somebody
     # else's, and must not stop this keystone from being adopted.
     blocking = [

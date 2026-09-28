@@ -259,3 +259,16 @@ def test_a_declared_line_comment_wins(repo):
     configure(repo, PARSER_TABLE.replace('".blk"', '".sql"') + 'line_comment = "//"\n')
     adapters.configure(load(repo))
     assert adapters.for_path("m.sql").comment_prefix("m.sql") == "//"
+
+
+def test_adopting_a_duplicated_definition_is_refused(repo, run_cli, capsys):
+    """A duplicate named block is one C6, not one per child, and `add` says
+    no before writing a sidecar for it."""
+    configure(repo, PARSER_TABLE)
+    (repo / "m.blk").write_text(
+        "# keystone: x\nblock x\n  a = 1\nend\nblock x\n  a = 2\nend\n"
+    )
+    assert run_cli("add", "--id", "x", "-m", "w") == 1
+    err = capsys.readouterr().err
+    assert "more than once" in err
+    assert not (repo / "keystones" / "default" / "x.md").exists()

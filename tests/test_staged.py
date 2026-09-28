@@ -199,3 +199,10 @@ def test_a_directory_expands_to_the_tracked_files_under_it(gated, run_cli, capsy
     path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
     assert run_cli("check", "billing") == 1
     assert "[C3]" in capsys.readouterr().err
+
+
+def test_findings_are_not_repeated_across_staged_paths(gated, run_cli, capsys):
+    path = gated / PAYOUT
+    path.write_text(path.read_text().replace("ROUND_HALF_UP", "ROUND_HALF_EVEN"))
+    assert run_cli("check", PAYOUT, SIDECAR) == 1
+    assert capsys.readouterr().err.count("[C3]") == 1

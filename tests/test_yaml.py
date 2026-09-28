@@ -103,10 +103,9 @@ def test_a_value_change_is_c3(gated, run_cli, capsys):
     ("old", "new"),
     [
         ("  replicas: 3", "  replicas:   3"),
-        ("  replicas: 3", "  replicas: 3   # three"),
         ('image:\n  name: app\n  tag: "1.2"', "image:\n  tag: '1.2'\n  name: app"),
     ],
-    ids=["spacing", "trailing comment", "sibling reorder and quotes"],
+    ids=["spacing", "sibling reorder and quotes"],
 )
 def test_layout_changes_are_invisible(gated, run_cli, capsys, old, new):
     edit(gated, old, new)
@@ -557,3 +556,14 @@ def test_a_file_with_several_keystones_is_parsed_once(values, run_cli, monkeypat
     structured._documents.cache_clear()
     assert run_cli("check", "--all", "--no-base") == 0
     assert len(calls) == 1
+
+
+@needs_yaml
+def test_a_trailing_comment_on_a_scalar_keystone_is_c4(gated, run_cli, capsys):
+    edit(gated, "  replicas: 3", "  replicas: 3  # floor")
+    status, err = check(run_cli, capsys)
+    assert status == 1 and "[C4]" in err and "[C3]" not in err
+    assert run_cli("fix") == 0
+    edit(gated, "# floor", "# ceiling")
+    status, err = check(run_cli, capsys)
+    assert status == 1 and "[C4]" in err

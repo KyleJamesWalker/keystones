@@ -55,3 +55,11 @@ def test_a_plugin_rendering_bump_is_named_as_such():
     )
     assert "lkml's rendering moved from render1 to render2" in text
     assert "keystones migrate" in text
+
+
+def test_a_missing_render_segment_reads_as_render1():
+    text = hasher_difference(
+        "keystones-plugin/1+lkml@1.3.7/abc123",
+        "keystones-plugin/1+lkml@1.3.7/render2",
+    )
+    assert "lkml's rendering moved from render1 to render2" in text

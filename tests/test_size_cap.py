@@ -104,3 +104,12 @@ def test_a_dependency_in_an_over_cap_file_is_refused_and_reported(
     )
     assert status == 1
     assert "max_scan_bytes" in capsys.readouterr().err
+
+
+def test_an_excluded_staged_file_gets_no_size_warning(repo, run_cli, capsys):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + 'exclude = ["build/**"]\n')
+    (repo / "build").mkdir()
+    (repo / "build" / "bundle.txt").write_text("x\n" * (MAX_SCAN_BYTES // 2))
+    assert run_cli("check", "build/bundle.txt") == 0
+    assert "[size]" not in capsys.readouterr().err

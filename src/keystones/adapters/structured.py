@@ -353,7 +353,27 @@ def hashes(src: str, target: Target) -> tuple[str, str]:
         for lineno, text in _comment_lines(src)
         if target.start <= lineno <= target.end and not marker_grammar.is_marker(text)
     ]
+    comments += _trailing_comments(src, target.start, target.end)
     return digest(rendered), digest(rendered + "\n--comments--\n" + "\n".join(comments))
+
+
+def _trailing_comments(src: str, start: int, end: int) -> list[str]:
+    """`k: 7  # note`: the comment after content, outside quotes, is text."""
+    out: list[str] = []
+    for line in src.splitlines()[start - 1 : end]:
+        if line.lstrip().startswith("#"):
+            continue
+        quote = None
+        for i, ch in enumerate(line):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            elif ch == "#" and i > 0 and line[i - 1].isspace():
+                out.append(line[i:].strip())
+                break
+    return out
 
 
 def canonical_source(src: str, target: Target) -> str:

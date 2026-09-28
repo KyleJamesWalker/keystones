@@ -582,6 +582,10 @@ An entry adopted while its hasher had a known C5-at-birth bug, such as
 after upgrading where `migrate` cannot prove it from a stored source that was
 wrong to begin with. `keystones fix -m` clears it; the owner reviews the diff.
 
+Adding `[tool.keystones]` to a Poetry project's `pyproject.toml` changes the
+file Poetry's lock hash covers, so stage the refreshed lockfile in the same
+commit or a lockfile-consistency hook will refuse it.
+
 ### What a hash does not see
 
 - A Python docstring is part of the AST, so editing one is C3.

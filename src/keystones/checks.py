@@ -400,6 +400,9 @@ def hasher_difference(recorded: str, expected: str) -> str:
                 )
             if r_match["rest"] != e_match["rest"]:
                 r_rest, e_rest = r_match["rest"].strip("/"), e_match["rest"].strip("/")
+                # An id written before a plugin versioned its rendering is render1.
+                if e_rest.startswith("render") and not r_rest.startswith("render"):
+                    r_rest = "render1"
                 if r_rest.startswith("render") and e_rest.startswith("render"):
                     notes.append(
                         f"{name}'s rendering moved from {r_rest} to {e_rest}; "
