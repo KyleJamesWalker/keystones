@@ -466,3 +466,34 @@ def test_a_file_that_does_not_parse_is_one_finding_not_one_per_keystone(
     assert status == 1
     assert err.count("[parse]") == 1
     assert "[C2]" not in err and "[kind]" not in err
+
+
+# --- the end of a file, and keep chomping inside a mapping ---------------------------
+
+EOF_CASES = {
+    "mapping at eof": (
+        "a:\n  # keystone(hash=yaml): k\n  b:\n    c: 1\n    d: 2",
+        "a.b",
+    ),
+    "block scalar at eof": (
+        "steps:\n  - name: s\n    # keystone(hash=yaml): k\n    run: |\n      echo hi",
+        "steps[name=s].run",
+    ),
+    "keep chomp inside a mapping": (
+        "a:\n  # keystone(hash=yaml): k\n  b:\n    t: |+\n      x\n\n  c: 1\n",
+        "a.b",
+    ),
+}
+
+
+@needs_yaml
+@pytest.mark.parametrize("case", sorted(EOF_CASES))
+def test_a_node_at_the_end_of_the_file_or_with_keep_chomping_passes_c5(
+    repo, run_cli, capsys, case
+):
+    src, target = EOF_CASES[case]
+    (repo / "e.yaml").write_text(src)
+    assert run_cli("add", "--id", "k", "-m", "why.") == 0
+    sidecar = next((repo / "keystones" / "default").glob("*.md")).read_text()
+    assert f'target = "e.yaml::{target}"' in sidecar
+    assert check(run_cli, capsys) == (0, "")

@@ -97,21 +97,32 @@ def canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _keeps(node, lines: list[str]) -> bool:
+    """Whether the node, or any scalar in it, keeps its trailing blank lines."""
+    yaml = _yaml()
+    if isinstance(node, yaml.ScalarNode):
+        line = node.start_mark.line
+        header = lines[line] if line < len(lines) else ""
+        return node.style in ("|", ">") and header.rstrip().endswith("+")
+    if isinstance(node, yaml.MappingNode):
+        return any(_keeps(v, lines) for _, v in node.value)
+    if isinstance(node, yaml.SequenceNode):
+        return any(_keeps(v, lines) for v in node.value)
+    return False
+
+
 def _end_line(node, lines: list[str]) -> int:
-    """PyYAML ends a block collection at the next token; a scalar on its line."""
+    """PyYAML ends a block collection at the next token, and a scalar, or a
+    node at the end of a file with no final newline, on its own line."""
     yaml = _yaml()
     mark = node.end_mark
+    text = lines[mark.line].rstrip("\r\n") if mark.line < len(lines) else ""
+    at_line_end = mark.column > 0 and mark.column >= len(text)
     block = mark.column == 0 or (
         isinstance(node, yaml.CollectionNode) and not node.flow_style
     )
-    end = mark.line if block else mark.line + 1
-    # A keep-chomped block scalar (`|+`, `>+`) owns its trailing blank lines.
-    header = lines[node.start_mark.line] if node.start_mark.line < len(lines) else ""
-    keeps = (
-        isinstance(node, yaml.ScalarNode)
-        and node.style in ("|", ">")
-        and (header.rstrip().endswith("+"))
-    )
+    end = mark.line + 1 if at_line_end or not block else mark.line
+    keeps = _keeps(node, lines)
     while (
         not keeps
         and end > node.start_mark.line + 1
@@ -285,12 +296,30 @@ def _region_value(body: str, target: str) -> object:
     return docs[0] if len(docs) == 1 else docs
 
 
+def _slice_value(src: str, target: Target) -> object:
+    """The node's value re-loaded from its own lines, as C5 re-loads the
+    stored slice, so a file without a final newline reads the same both ways."""
+    slice_ = canonical_source(src, target)
+    loaded = _yaml().safe_load(textwrap.dedent(slice_) + "\n")
+    if isinstance(loaded, dict) and len(loaded) == 1:
+        return next(iter(loaded.values()))
+    if isinstance(loaded, list) and len(loaded) == 1:
+        return loaded[0]
+    raise ResolutionError("not a single key or item")
+
+
 def hashes(src: str, target: Target) -> tuple[str, str]:
     if target.region:
         body = fallback.canonical_source(src, target)
         value = _region_value(body, str(target))
-    else:
+    elif target.qualname is None:
         value = _value_of(src, target)
+    else:
+        _value_of(src, target)  # the node must still resolve in context
+        try:
+            value = _slice_value(src, target)
+        except Exception:
+            value = _value_of(src, target)
     rendered = canonical(value)
     comments = [
         text
