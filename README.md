@@ -33,7 +33,7 @@ As a pre-commit hook:
 ```yaml
 repos:
   - repo: https://github.com/KyleJamesWalker/keystones
-    rev: v0.4.0
+    rev: v0.5.0
     hooks:
       - id: keystones          # staged text files, warns on drift
       - id: keystones-all      # whole repo, blocking
@@ -51,6 +51,14 @@ in an environment pre-commit builds for them, so `additional_dependencies` fixes
 the grammar version for your repo without colliding with anything your project
 itself depends on, and without waiting for a keystones release to move it. The
 package declares a range; your repo decides the version.
+
+`keystones-all` runs on the pre-push and manual stages, so a plain
+`pre-commit run --all-files` skips it and exits 0. CI must run
+`pre-commit run keystones-all --hook-stage manual --all-files`, or call
+`keystones check --all` directly. A repo gating YAML with `hash=yaml` adds
+`pyyaml` to the hook's `additional_dependencies`, or the `keystones[yaml]`
+extra; without it the YAML keystones read as orphans instead of failing with
+an install hint.
 
 The staged hook runs on every staged text file, whatever the language: a file
 with no marker in it costs one read and prints nothing, and a staged sidecar is
@@ -569,7 +577,7 @@ the hash, so un-exporting a symbol is a change.
 
 ### Upgrading
 
-Every release that moves a hasher, and this one moves three, needs one
+Every release that moves a hasher, and 0.5.0 moves four, needs one
 `keystones migrate` per repo after upgrading. It rewrites each entry whose
 recorded hasher differs from the installed one, proving the move from the
 stored source, and records the current hasher id. A recorded id that differs
