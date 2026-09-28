@@ -38,7 +38,7 @@ def check(run_cli, capsys, *args):
         (
             "class TestRounding:",
             "@pytest.mark.skip(reason='flaky')\nclass TestRounding:",
-            "pytest.mark.skip on class TestRounding",
+            "pytest.mark.skip(reason='flaky') on class TestRounding",
         ),
         (
             "class TestRounding:\n",
@@ -49,15 +49,44 @@ def check(run_cli, capsys, *args):
             "import pytest\n",
             "import pytest\n\n"
             "pytestmark = [pytest.mark.slow, pytest.mark.skipif(True, reason='x')]\n",
-            "pytest.mark.skipif on module pytestmark",
+            "pytest.mark.skipif(True, reason='x') on module pytestmark",
         ),
         (
             "import pytest\n",
             "import pytest\nimport unittest as ut\n",
             None,
         ),
+        (
+            "import pytest\n\n\nclass TestRounding:",
+            "import pytest\n\nskip = pytest.mark.skip\n\n\n@skip\nclass TestRounding:",
+            "pytest.mark.skip on class TestRounding",
+        ),
+        (
+            "import pytest\n",
+            "import pytest\n\npytest.skip('all of it', allow_module_level=True)\n",
+            "pytest.skip('all of it', allow_module_level=True) at module level",
+        ),
+        (
+            "class TestRounding:\n",
+            "class TestRounding:\n    __test__ = False\n\n",
+            "__test__ = False on class TestRounding",
+        ),
+        (
+            "import pytest\n",
+            "import pytest\n\n__test__ = False\n",
+            "__test__ = False at module level",
+        ),
     ],
-    ids=["class-decorator", "class-pytestmark", "module-pytestmark", "no-disabler"],
+    ids=[
+        "class-decorator",
+        "class-pytestmark",
+        "module-pytestmark",
+        "no-disabler",
+        "module-alias",
+        "module-level-skip",
+        "class-__test__",
+        "module-__test__",
+    ],
 )
 def test_a_skip_from_outside_the_function_is_c16(
     guarded, run_cli, capsys, old, new, named
@@ -77,7 +106,7 @@ def test_an_aliased_unittest_skip_is_recognised(guarded, run_cli, capsys):
     edit(guarded, "class TestRounding:", "@ut.skip('later')\nclass TestRounding:")
     status, err = check(run_cli, capsys)
     assert status == 1
-    assert "unittest.skip on class TestRounding" in err
+    assert "unittest.skip('later') on class TestRounding" in err
 
 
 def test_a_non_pytest_disabler_counts_once_configured(guarded, run_cli, capsys):
@@ -137,3 +166,18 @@ def test_a_skip_on_the_function_itself_is_c3_alone(guarded, run_cli, capsys):
     assert status == 1
     assert "[C3]" in err
     assert "[C16]" not in err
+
+
+def test_flipping_a_skipif_condition_is_c16(guarded, run_cli, capsys):
+    """The mark name alone would read `skipif(False)` and `skipif(True)` alike."""
+    edit(
+        guarded,
+        "class TestRounding:",
+        "@pytest.mark.skipif(False, reason='x')\nclass TestRounding:",
+    )
+    assert run_cli("fix", "--id", "guard", "-m", "Guarded by a flag.") == 0
+    assert check(run_cli, capsys)[0] == 0
+    edit(guarded, "skipif(False,", "skipif(True,")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "switched off by pytest.mark.skipif(True, reason='x')" in err

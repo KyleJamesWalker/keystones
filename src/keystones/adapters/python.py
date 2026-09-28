@@ -27,6 +27,9 @@ DISABLERS = frozenset(
     }
 )
 
+# Calls that stop a whole module from collecting.
+MODULE_SKIPS = frozenset({"pytest.skip", "pytest.importorskip"})
+
 name = "python"
 hasher_id = HASHER_ID
 extensions = (".py", ".pyi")
@@ -281,7 +284,11 @@ def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
 
 
 def _imports(tree: ast.Module) -> dict[str, str]:
-    """Local names bound by module-level imports, to the dotted name they stand for."""
+    """Module-level names to the dotted name they stand for.
+
+    Imports, plus a plain alias such as `skip = pytest.mark.skip`, resolved
+    through the imports above it.
+    """
     names: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -291,7 +298,26 @@ def _imports(tree: ast.Module) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             for alias in node.names:
                 names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, written = node.targets[0], _dotted(node.value)
+            if (
+                isinstance(target, ast.Name)
+                and written
+                and not isinstance(node.value, ast.Call)
+            ):
+                head, _, rest = written.partition(".")
+                names[target.id] = names.get(head, head) + (f".{rest}" if rest else "")
     return names
+
+
+def _arguments(expr: ast.AST) -> str:
+    """The call's arguments as written, so `skipif(True)` and `skipif(False)`
+    do not read alike. Empty for a bare mark."""
+    if not isinstance(expr, ast.Call):
+        return ""
+    parts = [ast.unparse(a) for a in expr.args]
+    parts += [f"{k.arg}={ast.unparse(k.value)}" for k in expr.keywords]
+    return f"({', '.join(parts)})"
 
 
 def _dotted(expr: ast.AST) -> str | None:
@@ -332,15 +358,30 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
     wanted = DISABLERS | set(extra)
     found: list[str] = []
 
+    def resolved(expr: ast.AST) -> str | None:
+        written = _dotted(expr)
+        if written is None:
+            return None
+        head, _, rest = written.partition(".")
+        return imports.get(head, head) + (f".{rest}" if rest else "")
+
     def scan(exprs: list[ast.AST], where: str) -> None:
         for expr in exprs:
-            written = _dotted(expr)
-            if written is None:
-                continue
-            head, _, rest = written.partition(".")
-            name = imports.get(head, head) + (f".{rest}" if rest else "")
-            if any(name == w or name.endswith(f".{w}") for w in wanted):
-                found.append(f"{name} on {where}")
+            name = resolved(expr)
+            if name and any(name == w or name.endswith(f".{w}") for w in wanted):
+                found.append(f"{name}{_arguments(expr)} on {where}")
+
+    def switches(body: list[ast.stmt], where: str) -> None:
+        for name, node in _assignments(body):
+            value = getattr(node, "value", None)
+            switched = isinstance(value, ast.Constant) and value.value is False
+            if name == "__test__" and switched:
+                found.append(f"__test__ = False {where}")
+        for node in body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                name = resolved(node.value)
+                if name in MODULE_SKIPS:
+                    found.append(f"{name}{_arguments(node.value)} {where}")
 
     parts = qualname.split(".")
     for depth in range(len(parts) - 1, 0, -1):
@@ -349,7 +390,9 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
         if isinstance(enclosing, ast.ClassDef):
             scan(enclosing.decorator_list, f"class {prefix}")
             scan(_marks(enclosing.body), f"class {prefix} pytestmark")
+            switches(enclosing.body, f"on class {prefix}")
     scan(_marks(tree.body), "module pytestmark")
+    switches(tree.body, "at module level")
     return sorted(set(found))
 
 

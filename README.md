@@ -150,6 +150,11 @@ unittest skips are built in; add your own by dotted name:
 disabling_decorators = ["acme.testing.quarantine"]
 ```
 
+C16 sees what is in the test's own file: marks with their arguments, a
+module-level alias of a mark, a module-level `pytest.skip(...)`, and
+`__test__ = False`. It does not see `collect_ignore` in a `conftest.py` or a
+`--deselect` in `pytest.ini`, which switch a test off from another file.
+
 Some paths are rewritten by a bot with no pull request, a GitOps mirror or a
 monitor backup, and a keystone there can only fail. List them and `add` refuses
 the path, while a marker or entry already under it is [C18]:
