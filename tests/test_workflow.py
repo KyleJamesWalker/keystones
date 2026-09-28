@@ -135,3 +135,18 @@ def test_list_and_index_commands(repo, run_cli):
     assert run_cli("list") == 0
     assert run_cli("list", "--category", "finance") == 0
     assert run_cli("index") == 0
+
+
+def test_a_syntax_error_in_a_keystoned_file_is_its_own_finding(repo, run_cli, capsys):
+    """An unclosed bracket used to surface as C2, which points at the sidecar."""
+    run_cli("add", "billing/payout.py::compute_payout", "--id", "p", "-m", "why.")
+    path = repo / "billing" / "payout.py"
+    path.write_text(path.read_text().replace('Decimal("0.01")', 'Decimal("0.01"'))
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "billing/payout.py:" in err and "[parse]" in err
+    assert "[C2]" not in err
+    capsys.readouterr()
+    assert run_cli("check", "billing/payout.py") == 1
+    assert "[parse]" in capsys.readouterr().err

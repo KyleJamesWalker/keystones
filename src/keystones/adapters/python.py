@@ -58,6 +58,9 @@ def markers(path: str, src: str) -> list[Marker]:
     """
     if marker_grammar.is_ignored(src):
         return []
+    # A file that does not parse has no definitions to attach to; saying so
+    # here beats an orphan-entry report that points at the sidecar.
+    ast.parse(src)
     found = [
         m
         for m in marker_grammar.scan_lines(path, src, _comments(src))[0]

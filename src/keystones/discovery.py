@@ -132,6 +132,19 @@ def scan(
         readable, why = True, ""
         try:
             found = preferred.markers(rel, src)
+        except SyntaxError as exc:
+            skipped.add(rel)
+            findings.append(
+                Finding(
+                    "parse",
+                    Severity.ERROR,
+                    f"{rel} does not parse: {exc.msg}. A keystone in it cannot be "
+                    "checked until it does.",
+                    rel,
+                    exc.lineno,
+                )
+            )
+            continue
         except RegionError as exc:
             findings.append(Finding("region", Severity.ERROR, str(exc), rel))
             continue

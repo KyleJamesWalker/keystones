@@ -75,6 +75,7 @@ run one.
 | `kind` | The marker asks for a basis this file does not offer, puts `hash=text` on a node, or the file does not parse and no basis was chosen. | Pick a basis with `hash=`, or use a region or a whole-file marker. |
 | `resolve` | The marker attaches to nothing, or its target cannot be hashed. | Move the marker above a definition, or use a region. |
 | `plugin` | A preprocessor or parser plugin broke its contract, for example by changing the line count. | A plugin bug; report it to the plugin. |
+| `parse` | A Python file with a keystone in it has a syntax error, so nothing in it can be checked. Named with the line. | Fix the syntax error. |
 | `sidecar` | A staged sidecar cannot be parsed. | Restore the sidecar's `toml` block. |
 | `size` | A keystone's file is over `max_scan_bytes`, so it was not read. | Raise `[tool.keystones] max_scan_bytes`, or keystone a smaller file. |
 | `doctor` | `keystones doctor` found protection that does not require owner review. Only that command raises it. | Change branch protection or the ruleset; the message says which setting. |

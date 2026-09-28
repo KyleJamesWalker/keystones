@@ -298,11 +298,26 @@ def _parse(spec: LanguageSpec, src: str, strict: bool = True):
     src, _ = preprocessed(spec.preprocessor, src)
     tree = _parser(spec.language).parse(src.encode("utf-8"))
     if strict and tree.root_node.has_error:
+        where = _first_error(tree.root_node)
         raise ParseError(
-            f"does not parse as {spec.language}. A templating layer the grammar "
-            "cannot read (dbt Jinja, ERB) will do this."
+            f"does not parse as {spec.language}: {where}. Either the grammar "
+            "does not know this construct, or a templating layer it cannot read "
+            "(dbt Jinja, ERB) is in the way."
         )
     return tree
+
+
+def _first_error(root) -> str:
+    """The first error or missing node, as a line and the text around it."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            text = node.text.decode("utf-8", "replace").strip().split("\n")[0][:40]
+            near = f"near {text!r}" if text else "at a missing token"
+            return f"line {node.start_point[0] + 1}, {near}"
+        stack.extend(reversed([c for c in node.children if c.has_error]))
+    return "at an unknown position"
 
 
 # Separators a formatter adds or removes freely. Prettier writes a trailing

@@ -563,3 +563,11 @@ def test_changing_a_qualified_name_in_bigquery_moves_the_hash(bigquery_ext, old,
     before = semantic("q.bqsql", BQ_SRC)
     after = semantic("q.bqsql", BQ_SRC.replace(old, new))
     assert before != after
+
+
+def test_a_grammar_error_names_its_line(bigquery_ext):
+    """Blaming a templating layer sends people the wrong way when the grammar
+    simply does not know a construct."""
+    src = "-- keystone: v\nCREATE VIEW v AS\nSELECT a, IF(a = 1, 1, 0) AS b FROM t\n"
+    with pytest.raises(ts.ParseError, match=r"line 3.*near"):
+        ts.markers("q.bqsql", src)
