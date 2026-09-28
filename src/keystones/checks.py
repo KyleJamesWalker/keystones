@@ -404,8 +404,25 @@ def run_all(
     return findings
 
 
+class _Rulesets:
+    """The rules C8 may accept in place of CODEOWNERS, read once and only on demand.
+
+    The read is a GitHub API call, so a repo CODEOWNERS fully covers never pays it.
+    """
+
+    def __init__(self, cfg: Config) -> None:
+        self._cfg = cfg
+        self._rules: list | None = None
+        self.findings: list[Finding] = []
+
+    @property
+    def rules(self) -> list:
+        if self._rules is None:
+            self._rules, self.findings = _ruleset_reviewers(self._cfg)
+        return self._rules
+
+
 def _ruleset_reviewers(cfg: Config) -> tuple[list, list[Finding]]:
-    """The rules C8 may accept in place of CODEOWNERS, when the repo opts in."""
     from keystones import doctor
 
     if not cfg.codeowners_from_rulesets:
@@ -424,10 +441,10 @@ def _ruleset_reviewers(cfg: Config) -> tuple[list, list[Finding]]:
 
 
 def _covered_by_ruleset(
-    ruled: list, rel: str, problem: Finding, what: str | None = None
+    rulesets: _Rulesets, rel: str, problem: Finding, what: str | None = None
 ) -> Finding:
     """A notice naming the ruleset that covers `rel`, or the problem unchanged."""
-    for rule in ruled:
+    for rule in rulesets.rules:
         pattern = rule.covering(rel)
         if pattern is not None:
             return Finding(
@@ -445,10 +462,11 @@ def c8_ownership(cfg: Config) -> list[Finding]:
     from keystones import codeowners
 
     owners_file, rules = codeowners.find(cfg.repo_root)
-    ruled, findings = _ruleset_reviewers(cfg)
-    if owners_file is None and not ruled:
+    rulesets = _Rulesets(cfg)
+    findings: list[Finding] = []
+    if owners_file is None and not rulesets.rules:
         return [
-            *findings,
+            *rulesets.findings,
             Finding(
                 "C8",
                 Severity.ERROR,
@@ -475,7 +493,7 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         if rule is None or not rule.owners:
             findings.append(
                 _covered_by_ruleset(
-                    ruled,
+                    rulesets,
                     rel,
                     Finding(
                         "C8",
@@ -512,10 +530,13 @@ def c8_ownership(cfg: Config) -> list[Finding]:
             continue
         findings.append(
             _covered_by_ruleset(
-                ruled, probe, problem, f"category '{category}' ({cfg.root}/{category}/)"
+                rulesets,
+                probe,
+                problem,
+                f"category '{category}' ({cfg.root}/{category}/)",
             )
         )
-    return findings
+    return [*rulesets.findings, *findings]
 
 
 def c11_dependencies(cfg: Config, entry_list: list[Entry]) -> list[Finding]:

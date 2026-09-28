@@ -145,8 +145,12 @@ def test_c8_falls_back_to_codeowners_when_rules_cannot_be_read(
         raise doctor.Unavailable("no GH_TOKEN or GITHUB_TOKEN in the environment")
 
     monkeypatch.setattr(doctor, "required_reviewers", unreadable)
-    assert run_cli("check", "--all", "--no-base") == 0
-    assert "only CODEOWNERS was checked" in capsys.readouterr().err
+    (repo / ".github" / "CODEOWNERS").unlink()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "warning: [C8] codeowners_from_rulesets is on" in err
+    assert "only CODEOWNERS was checked" in err
+    assert "error: [C8] no CODEOWNERS file" in err
 
 
 def test_codeowners_from_rulesets_must_be_a_boolean(repo, run_cli):
@@ -167,3 +171,17 @@ def test_a_ruleset_pattern_is_matched_by_path_segment():
         )
         is None
     )
+
+
+def test_c8_reads_rulesets_only_when_codeowners_leaves_a_gap(
+    repo, run_cli, monkeypatch
+):
+    from keystones import doctor
+
+    _rulesets(repo, monkeypatch, ["**"])
+
+    def never(root):
+        raise AssertionError("C8 called the GitHub API with nothing to cover")
+
+    monkeypatch.setattr(doctor, "required_reviewers", never)
+    assert run_cli("check", "--all", "--no-base") == 0
