@@ -118,6 +118,20 @@ def for_path(path: str, allow_fallback: bool = True):
     return fallback if allow_fallback else None
 
 
+def hasher_id(adapter, target) -> str:
+    """The hasher an entry records. A region is text whatever its file's parser.
+
+    `target` is a Target or the string an entry stores; `#L` marks a region.
+    """
+    if isinstance(target, str):
+        region, path = "#L" in target, target.split("::")[0].split("#")[0]
+    else:
+        region, path = target.region, target.path
+    if region:
+        return fallback.HASHER_ID
+    return adapter.hasher_id_for_path(path)
+
+
 def needs_extra(path: str) -> bool:
     """A language we support, whose parser is not installed.
 

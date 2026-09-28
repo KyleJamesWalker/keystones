@@ -42,7 +42,7 @@ def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Ou
         if adapters.needs_extra(rel):
             continue
         adapter = adapters.for_entry(entry)
-        expected = adapter.hasher_id_for_path(rel)
+        expected = adapters.hasher_id(adapter, entry.target)
         if not entry.hasher or entry.hasher == expected:
             continue
 

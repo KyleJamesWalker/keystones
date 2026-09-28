@@ -249,6 +249,10 @@ normalised text (LF, no trailing whitespace, no runs of blank lines), so a
 reformat inside a region does trip it. Only the Python adapter is
 reformat-immune.
 
+Whole-line comments inside a region are kept out of the semantic hash where the
+file type's comment leader is known, so editing one is [C4] and clears with a
+`fix` and no note. A type keystones cannot name a leader for hashes every line.
+
 A file that documents markers rather than carrying them opts out with a
 `keystones: ignore-file` directive anywhere in it. This README has one.
 
@@ -307,7 +311,7 @@ move that file's hash basis and report drift on code nobody touched.
 ```toml
 target = "models/revenue.sql#L5-L5"
 hash   = "text"
-hasher = "keystones-text/1"
+hasher = "keystones-text/2"
 ```
 
 `hash` is the choice a person made and does not move. `hasher` is the exact

@@ -4,6 +4,9 @@ Any file can carry a file-scope or region keystone with no parser at all. The
 canonical form is normalised text, which means a reformat of a whole-file
 keystone does trip it. Region markers exist so YAML and the rest get
 granularity instead of collapsing to the file.
+
+Where the file's comment syntax is known, whole-line comments are kept out of
+the semantic hash and in the text hash, so a comment edit is C4 rather than C3.
 """
 
 from __future__ import annotations
@@ -14,7 +17,51 @@ from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
 from keystones.models import Marker, Scope, Target
 
-HASHER_ID = "keystones-text/1"
+HASHER_ID = "keystones-text/2"
+
+# Line-comment leaders for types no parser claims. A type not listed hashes
+# every line, because guessing wrong would drop code from the hash.
+_LEADERS = {
+    "#": (
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".cfg",
+        ".conf",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".lkml",
+        ".rb",
+        ".properties",
+        ".env",
+        ".tfvars",
+        ".hcl",
+        ".tf",
+    ),
+    "--": (".sql", ".ddl", ".lua", ".hs"),
+    "//": (
+        ".c",
+        ".h",
+        ".cpp",
+        ".hpp",
+        ".cs",
+        ".java",
+        ".kt",
+        ".swift",
+        ".rs",
+        ".scala",
+        ".proto",
+        ".dart",
+        ".jsonc",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".go",
+    ),
+}
+_LEADER_BY_EXT = {ext: leader for leader, exts in _LEADERS.items() for ext in exts}
+_LEADER_BY_NAME = {"Dockerfile": "#", "Makefile": "#", "Justfile": "#"}
 
 name = "fallback"
 hasher_id = HASHER_ID
@@ -37,6 +84,28 @@ def normalise(text: str) -> str:
     while out and not out[-1]:
         out.pop()
     return "\n".join(out)
+
+
+def leader_for(path: str) -> str | None:
+    """The line-comment leader this file uses, or None when nobody can say."""
+    from keystones import adapters
+
+    parsed = adapters.for_path(path, allow_fallback=False)
+    if parsed is not None:
+        return parsed.comment_prefix(path)
+    name = path.rsplit("/", 1)[-1]
+    if name in _LEADER_BY_NAME:
+        return _LEADER_BY_NAME[name]
+    return next(
+        (leader for ext, leader in _LEADER_BY_EXT.items() if path.endswith(ext)),
+        None,
+    )
+
+
+def _without_comments(lines: list[str], leader: str | None) -> list[str]:
+    if leader is None:
+        return lines
+    return [line for line in lines if not line.lstrip().startswith(leader)]
 
 
 def _without_markers(lines: list[str]) -> list[str]:
@@ -73,15 +142,27 @@ def resolve(src: str, marker: Marker) -> Target:
     return Target(marker.path, None, 1, max(len(lines), 1))
 
 
+def _lines(src: str, target: Target) -> list[str]:
+    return _without_markers(src.splitlines()[target.start - 1 : target.end])
+
+
 def _body(src: str, target: Target) -> str:
-    lines = src.splitlines()[target.start - 1 : target.end]
-    return normalise("\n".join(_without_markers(lines)))
+    return normalise("\n".join(_lines(src, target)))
+
+
+def _digest(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _pair(lines: list[str], path: str) -> tuple[str, str]:
+    """Semantic without whole-line comments, text with them."""
+    leader = leader_for(path)
+    semantic = normalise("\n".join(_without_comments(lines, leader)))
+    return _digest(semantic), _digest(normalise("\n".join(lines)))
 
 
 def hashes(src: str, target: Target) -> tuple[str, str]:
-    """No AST, so there is nothing to separate comments from. Both hashes match."""
-    digest = "sha256:" + hashlib.sha256(_body(src, target).encode("utf-8")).hexdigest()
-    return digest, digest
+    return _pair(_lines(src, target), target.path)
 
 
 def canonical_source(src: str, target: Target) -> str:
@@ -97,7 +178,8 @@ def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
 
 
 def hash_stored_source(source: str, target: str) -> str:
-    return "sha256:" + hashlib.sha256(normalise(source).encode("utf-8")).hexdigest()
+    path = target.split("::")[0].split("#")[0]
+    return _pair(source.splitlines(), path)[0]
 
 
 def hasher_id_for_path(path: str) -> str:
@@ -110,7 +192,7 @@ def duplicate_qualnames(path: str, src: str) -> set[str]:
 
 
 def comment_prefix(path: str) -> str:
-    return "#"
+    return leader_for(path) or "#"
 
 
 def kind_for_path(path: str) -> str:

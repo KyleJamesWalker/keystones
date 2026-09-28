@@ -95,7 +95,7 @@ def _entry(**over) -> Entry:
         category="finance",
         target="m.sql#L2-L3",
         hash="text",
-        hasher="keystones-text/1",
+        hasher="keystones-text/2",
         semantic="sha256:a",
         text="sha256:a",
     )
@@ -158,7 +158,7 @@ def test_an_unreadable_file_with_hash_text_just_works(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
     sidecar = (repo / "keystones" / "finance" / "rev-rec.md").read_text()
     assert 'hash = "text"' in sidecar
-    assert 'hasher = "keystones-text/1"' in sidecar
+    assert 'hasher = "keystones-text/2"' in sidecar
 
 
 @needs_extra

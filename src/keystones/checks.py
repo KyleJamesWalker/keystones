@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
+from keystones import adapters
 from keystones.adapters.base import ResolutionError
 from keystones.config import Config
 from keystones.discovery import Resolved
@@ -125,7 +126,7 @@ def c3_c4_hashes(
                 )
             )
             continue
-        expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        expected_hasher = adapters.hasher_id(item.adapter, item.target)
         rehashed = entry.hasher and entry.hasher != expected_hasher
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
         try:
@@ -272,7 +273,7 @@ def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
         if adapters.needs_extra(rel):
             continue
         adapter = adapters.for_entry(entry)
-        if entry.hasher and entry.hasher != adapter.hasher_id_for_path(rel):
+        if entry.hasher and entry.hasher != adapters.hasher_id(adapter, entry.target):
             continue
         try:
             actual = adapter.hash_stored_source(entry.source, entry.target)
@@ -589,7 +590,7 @@ def hasher_mismatch(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
         if adapters.needs_extra(rel):
             continue
         adapter = adapters.for_path(rel)
-        expected = adapter.hasher_id_for_path(rel)
+        expected = adapters.hasher_id(adapter, entry.target)
         if entry.hasher and entry.hasher != expected:
             out.append(
                 Finding(

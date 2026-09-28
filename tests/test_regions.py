@@ -164,3 +164,88 @@ def test_a_marker_in_a_python_string_is_not_a_region(repo, run_cli):
         'SAMPLE = """\n# keystone:start(finance): not-real\nbody\n# keystone:end\n"""\n'
     )
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_keystone_end_line_is_not_a_point_marker():
+    from keystones.markers import parse_point
+
+    assert parse_point("# keystone:end", "x.py", 3) is None
+
+
+def test_a_comment_edit_inside_a_region_is_comment_drift(infra, run_cli, capsys):
+    edit_config(
+        infra, "  exportRoutes: true", "  # routes leave the VPC\n  exportRoutes: true"
+    )
+    assert run_cli("fix") == 0, "a new comment line moves the region, no note"
+    edit_config(infra, "# routes leave the VPC", "# routes leave the VPC, reviewed")
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "[C4] comments inside keystone 'vpc-peering-cidrs' changed" in err
+    assert "[C3]" not in err
+    assert run_cli("fix") == 0, "a comment edit needs no note"
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_region_records_the_text_hasher_whatever_the_file(repo, run_cli):
+    """A Python region is hashed as text, so it must say so, or a text hasher
+    bump would read as drift in code nobody touched."""
+    (repo / "rules.py").write_text(
+        "# keystone:start: limits\nLIMIT = 1  # per day\n# keystone:end\n"
+    )
+    assert run_cli("add", "--id", "limits", "-m", "Rate limit.") == 0
+    sidecar = (repo / "keystones" / "default" / "limits.md").read_text()
+    assert f'hasher = "{fallback.HASHER_ID}"' in sidecar
+    (repo / "rules.py").write_text(
+        "# keystone:start: limits\n# tightened 2026\nLIMIT = 1  # per day\n"
+        "# keystone:end\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert run_cli("fix") == 0
+
+
+def test_a_file_with_no_known_comment_syntax_hashes_every_line(repo, run_cli, capsys):
+    (repo / "notes.custom").write_text(
+        "# keystone:start: n\n# note\nvalue\n# keystone:end\n"
+    )
+    assert run_cli("add", "--id", "n", "-m", "Why.") == 0
+    (repo / "notes.custom").write_text(
+        "# keystone:start: n\n# edited\nvalue\n# keystone:end\n"
+    )
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3]" in capsys.readouterr().err
+
+
+def test_a_region_hashed_before_comments_were_split_migrates_across(infra, run_cli):
+    """The stored source still carries the comment, so the proof holds."""
+    edit_config(
+        infra, "  exportRoutes: true", "  # routes leave the VPC\n  exportRoutes: true"
+    )
+    assert run_cli("fix") == 0
+    path = infra / "keystones" / "infra" / "vpc-peering-cidrs.md"
+    raw = path.read_text()
+    old_hasher = 'hasher = "keystones-text/1"'
+    raw = raw.replace(f'hasher = "{fallback.HASHER_ID}"', old_hasher)
+    semantic = raw.split('semantic = "', 1)[1].split('"', 1)[0]
+    raw = raw.replace(
+        f'semantic = "{semantic}"', 'semantic = "sha256:' + "0" * 64 + '"'
+    )
+    path.write_text(raw)
+    assert run_cli("migrate") == 0
+    assert f'hasher = "{fallback.HASHER_ID}"' in path.read_text()
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@pytest.mark.parametrize(
+    ("path", "leader"),
+    [
+        ("a.yaml", "#"),
+        ("a.sql", "--"),
+        ("a.py", "#"),
+        ("a.java", "//"),
+        ("a.custom", None),
+    ],
+)
+def test_comment_leaders_by_file_type(path, leader):
+    assert fallback.leader_for(path) == leader

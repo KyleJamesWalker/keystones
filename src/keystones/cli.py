@@ -196,7 +196,7 @@ def cmd_fix(args, cfg: Config) -> int:
             failed = True
             continue
         target_str = str(item.target)
-        current_hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        current_hasher = adapters.hasher_id(item.adapter, item.target)
         if entry.hasher and entry.hasher != current_hasher:
             # Writing here would store a hash the rest of the repo cannot
             # reproduce, and the next check would ask for another fix forever.
@@ -251,7 +251,7 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.semantic = semantic
         entry.text = text
         entry.hash = item.adapter.kind_for_path(item.marker.path)
-        entry.hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        entry.hasher = adapters.hasher_id(item.adapter, item.target)
         entry.source = item.adapter.canonical_source(src, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
         entry.disabled_by = disabled_by
@@ -374,7 +374,7 @@ def _adopt(args, cfg: Config) -> int:
         category=category,
         target=str(item.target),
         hash=item.adapter.kind_for_path(item.marker.path),
-        hasher=item.adapter.hasher_id_for_path(item.marker.path),
+        hasher=adapters.hasher_id(item.adapter, item.target),
         semantic=semantic,
         text=text_digest,
         review_every=args.review_every,
@@ -638,7 +638,7 @@ def cmd_add(args, cfg: Config) -> int:
         category=args.category,
         target=str(new_target),
         hash=adapter.kind_for_path(rel),
-        hasher=adapter.hasher_id_for_path(rel),
+        hasher=adapters.hasher_id(adapter, new_target),
         semantic=semantic,
         text=text,
         review_every=args.review_every,
