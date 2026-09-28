@@ -350,6 +350,15 @@ def _adopt(args, cfg: Config) -> int:
 
     item = match[0]
     category = item.marker.category
+    pattern = cfg.unreviewed_by(item.marker.path)
+    if pattern is not None:
+        print(
+            f"keystones: [C18] {item.marker.path} matches '{pattern}' in "
+            "[tool.keystones] unreviewed, so it is rewritten without review and "
+            "no gate can hold there.",
+            file=sys.stderr,
+        )
+        return 1
     if cfg.sidecar_path(category, keystone_id).exists():
         print(
             f"keystones: '{keystone_id}' already exists in {category}",
@@ -552,6 +561,15 @@ def cmd_add(args, cfg: Config) -> int:
     path = cfg.repo_root / rel
     if not path.is_file():
         print(f"keystones: no such file {rel}", file=sys.stderr)
+        return 1
+    pattern = cfg.unreviewed_by(rel)
+    if pattern is not None:
+        print(
+            f"keystones: [C18] {rel} matches '{pattern}' in [tool.keystones] "
+            "unreviewed, so it is rewritten without review and no gate can hold "
+            "there.",
+            file=sys.stderr,
+        )
         return 1
     adapter = adapters.for_path(rel)
     if adapter is None:

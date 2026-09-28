@@ -254,6 +254,52 @@ def c16_disabled(
     return out
 
 
+def c18_unreviewed(
+    cfg: Config, resolved: list[Resolved], entries: dict[Key, Entry], scoped: bool
+) -> list[Finding]:
+    """A gate on a path nobody reviews is a gate that can only fail."""
+    out = []
+    seen: set[Key] = set()
+    for item in resolved:
+        pattern = cfg.unreviewed_by(item.marker.path)
+        if pattern is None:
+            continue
+        seen.add(item.marker.key)
+        out.append(
+            Finding(
+                "C18",
+                Severity.ERROR,
+                f"keystone '{item.marker.id}' is in {item.marker.path}, which "
+                f"'{pattern}' in [tool.keystones] unreviewed says is rewritten "
+                "without review, so no gate can hold there. Remove the marker "
+                "and its entry, or take the path off the list.",
+                item.marker.path,
+                item.marker.lineno,
+                owner_hint=item.marker.category,
+            )
+        )
+    if scoped:
+        return out
+    for key, entry in sorted(entries.items()):
+        rel = entry.target.split("::")[0].split("#")[0]
+        pattern = cfg.unreviewed_by(rel)
+        if pattern is None or key in seen:
+            continue
+        out.append(
+            Finding(
+                "C18",
+                Severity.ERROR,
+                f"keystone '{entry.id}' targets {rel}, which '{pattern}' in "
+                "[tool.keystones] unreviewed says is rewritten without review, "
+                "so no gate can hold there. Delete the entry, or take the path "
+                "off the list.",
+                entry.path,
+                owner_hint=entry.category,
+            )
+        )
+    return out
+
+
 def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
     from keystones import adapters
 
@@ -386,7 +432,10 @@ def run_all(
 ) -> list[Finding]:
     """`scoped` means only some files were seen, so whole-repo checks are skipped."""
     entries = {entry.key: entry for entry in entry_list}
-    findings = c1_orphan_markers(resolved, entries)
+    findings = c18_unreviewed(cfg, resolved, entries, scoped)
+    doomed = {f.path for f in findings}
+    resolved = [item for item in resolved if item.marker.path not in doomed]
+    findings += c1_orphan_markers(resolved, entries)
     findings += c3_c4_hashes(cfg, resolved, entries, warn_only=warn_only)
     findings += c7_categories(cfg, resolved)
     findings += c7_category_agreement(resolved, entries)

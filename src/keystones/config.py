@@ -109,6 +109,8 @@ class Config:
     codeowners_from_rulesets: bool = False
     # Added to the built-in pytest and unittest ones. See C16.
     disabling_decorators: tuple[str, ...] = ()
+    # Paths a bot rewrites with no pull request, where no gate can hold. See C18.
+    unreviewed: tuple[str, ...] = ()
 
     @property
     def sidecar_root(self) -> Path:
@@ -128,13 +130,22 @@ class Config:
         parts = PurePosixPath(rel_path).parts
         if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
             return True
-        # fnmatch does not match `x/y` against `**/x/y`, and users write the
-        # `**/` form expecting it to cover the repo root as well.
-        return any(
-            fnmatch(rel_path, pat)
-            or (pat.startswith("**/") and fnmatch(rel_path, pat[3:]))
-            for pat in self.exclude
-        )
+        return _matches(rel_path, self.exclude) is not None
+
+    def unreviewed_by(self, rel_path: str) -> str | None:
+        """The `unreviewed` pattern covering this path, if one does."""
+        return _matches(rel_path, self.unreviewed)
+
+
+def _matches(rel_path: str, patterns: tuple[str, ...]) -> str | None:
+    # fnmatch does not match `x/y` against `**/x/y`, and users write the
+    # `**/` form expecting it to cover the repo root as well.
+    for pat in patterns:
+        if fnmatch(rel_path, pat) or (
+            pat.startswith("**/") and fnmatch(rel_path, pat[3:])
+        ):
+            return pat
+    return None
 
 
 class ConfigError(Exception):
@@ -456,6 +467,11 @@ def load(repo_root: Path | None = None) -> Config:
         raise ConfigError(
             "tool.keystones.disabling_decorators must be a list of dotted names"
         )
+    unreviewed = data.get("unreviewed", [])
+    if not isinstance(unreviewed, list) or not all(
+        isinstance(u, str) and u for u in unreviewed
+    ):
+        raise ConfigError("tool.keystones.unreviewed must be a list of path patterns")
     if "default" not in categories:
         categories = ("default", *categories)
     return Config(
@@ -466,4 +482,5 @@ def load(repo_root: Path | None = None) -> Config:
         languages=_languages(data),
         codeowners_from_rulesets=from_rulesets,
         disabling_decorators=tuple(disabling),
+        unreviewed=tuple(unreviewed),
     )

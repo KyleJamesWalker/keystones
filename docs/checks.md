@@ -36,6 +36,7 @@ warnings.
 | C13 | Hasher mismatch | The entry was hashed by a different hasher (serializer, grammar or spec version) and the hashes disagree, so whether the code changed cannot be told. | error | staged, whole repo | Install the grammar pack the repo pins, or `keystones migrate`. |
 | C14 | Hash kind | The sidecar's `hash` differs from the basis the marker or `[[tool.keystones.language]]` gates on. | error | staged, whole repo | `keystones migrate` if the config changed on purpose; otherwise make the marker and the sidecar agree. |
 | C16 | Disabled test | A skip, skipif or xfail mark, or a unittest skip, now switches the keystoned definition off from outside its own hash: on an enclosing class, or in a class or module `pytestmark`. A mark on the definition itself is inside its hash, so that is C3. Also fires when one reviewed earlier is removed. `disabling_decorators` adds names to the built-in list. | error | staged, whole repo | `keystones fix --id <id> -m "<why>"` records the new set in `disabled_by`, so the owner reviews it. |
+| C18 | Unreviewed path | A marker, or an entry's target, sits under a pattern in `[tool.keystones] unreviewed`: a path a bot rewrites with no pull request, where no gate can hold. `add` refuses such a path up front. | error | staged (markers), whole repo | Remove the marker and its entry, or take the path off the list. |
 
 A grammar version difference that still produces the same hash says nothing.
 Only a disagreement surfaces, and then as C13, never as C3.

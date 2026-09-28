@@ -131,6 +131,15 @@ unittest skips are built in; add your own by dotted name:
 disabling_decorators = ["acme.testing.quarantine"]
 ```
 
+Some paths are rewritten by a bot with no pull request, a GitOps mirror or a
+monitor backup, and a keystone there can only fail. List them and `add` refuses
+the path, while a marker or entry already under it is [C18]:
+
+```toml
+[tool.keystones]
+unreviewed = ["deploy/mirror/**"]
+```
+
 `review_every = "180d"` sets a staleness budget. There is deliberately no
 `reviewed` field: a stored date would be whatever `fix` last wrote, so the age
 comes from `git log` on the sidecar itself. Going stale warns and shows up in
