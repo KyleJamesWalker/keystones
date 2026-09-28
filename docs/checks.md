@@ -10,9 +10,9 @@ in Actions.
 staged pre-commit hook runs on the files being committed. *Whole repo* is
 `keystones check --all`, run by the `keystones-all` hook on pre-push and in CI.
 Checks that need the whole tree only run in whole-repo mode, except that a
-staged sidecar also gets C2 and C5, and a staged keystone's own `depends` and
-`twins` get C11 and C17. A staged file that is another keystone's dependency
-or twin is only checked in whole-repo mode, and the staged summary says so.
+staged sidecar also gets C2 and C5, and C11 and C17 run for every keystone
+whose file, dependency or twin is among the staged paths, found through the
+sidecars alone.
 
 **Severity.** An error fails the run. A warning is reported and passes. A
 notice reports a pass that went a non-default route. `--warn-only`, which the

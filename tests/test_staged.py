@@ -75,13 +75,13 @@ def test_a_marker_in_an_unparsed_type_is_checked(repo, run_cli, capsys, name):
 
 
 def test_the_staged_path_reads_only_what_it_is_given(gated, run_cli, monkeypatch):
-    from keystones import discovery, sidecar
+    """Sidecars are read for the reverse lookup; the source tree never is."""
+    from keystones import discovery
 
     def everything(*args, **kwargs):
         raise AssertionError("the staged path walked the whole repo")
 
     monkeypatch.setattr(discovery, "_tracked_files", everything)
-    monkeypatch.setattr(sidecar, "load_all", everything)
     (gated / "notes.txt").write_text("hi\n")
     assert run_cli("check", PAYOUT, SIDECAR, "notes.txt") == 0
 
@@ -146,3 +146,29 @@ def test_the_staged_summary_names_what_it_did_not_run(gated, run_cli, capsys):
     out = capsys.readouterr().out
     assert "1 keystone(s) verified" in out
     assert "check --all" in out and "C9" in out
+
+
+def test_a_staged_file_that_is_someone_elses_twin_is_checked(repo, run_cli, capsys):
+    (repo / "copy.py").write_text(
+        "from decimal import ROUND_HALF_UP, Decimal\n\n\n"
+        "def compute_payout(amount: Decimal) -> Decimal:\n"
+        '    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)\n'
+    )
+    args = ("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w")
+    assert run_cli(*args, "--twin", "copy.py::compute_payout") == 0
+    (repo / "copy.py").write_text((repo / "copy.py").read_text().replace("0.01", "0.1"))
+    capsys.readouterr()
+    assert run_cli("check", "copy.py") == 1
+    assert "[C17]" in capsys.readouterr().err
+
+
+def test_a_staged_file_that_is_someone_elses_dependency_is_checked(
+    repo, run_cli, capsys
+):
+    (repo / "rates.py").write_text("BASE = 0.07\n")
+    args = ("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w")
+    assert run_cli(*args, "--depends", "rates.py::BASE") == 0
+    (repo / "rates.py").write_text("BASE = 0.09\n")
+    capsys.readouterr()
+    assert run_cli("check", "rates.py") == 1
+    assert "[C11]" in capsys.readouterr().err

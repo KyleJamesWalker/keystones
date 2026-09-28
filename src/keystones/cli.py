@@ -149,18 +149,32 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
             )
     findings += c5_stored_source(staged)
     findings += c2_orphan_entries(resolved, staged, skipped | unread)
-    # The staged keystones' own dependencies and twins: a copy or a helper
-    # drifting is what the hook is for, and both cost only the files named.
-    findings += c11_dependencies(cfg, list(entries.values()))
-    findings += c17_twins(cfg, list(entries.values()))
+    # The staged keystones' own dependencies and twins, plus every keystone
+    # whose dependency or twin is among the staged files. The reverse lookup
+    # reads sidecars only, never the rest of the tree.
+    linked = dict(entries)
+    staged_paths = set(paths)
+    for category in cfg.categories:
+        directory = cfg.category_dir(category)
+        for sidecar_path in (
+            sorted(directory.glob("*.md")) if directory.is_dir() else []
+        ):
+            try:
+                entry = sidecar.parse(sidecar_path, category)
+            except (sidecar.SidecarError, ValueError):
+                continue  # reported already if staged; otherwise --all's
+            named = {t.partition("::")[0] for t in entry.twins + entry.depends}
+            if named & staged_paths:
+                linked.setdefault(entry.key, entry)
+    findings += c11_dependencies(cfg, list(linked.values()))
+    findings += c17_twins(cfg, list(linked.values()))
     if not resolved and not staged and not findings:
         return 0
     _report(findings, args.format or _default_format(), cfg.repo_root)
     if all(f.severity is Severity.NOTICE for f in findings):
         print(
             f"keystones: {len(resolved)} keystone(s) verified. Not run here: C2, "
-            "C6, C8, C9, C10, C12, and C11/C17 for keystones in other files; "
-            "`keystones check --all` runs them."
+            "C6, C8, C9, C10 and C12; `keystones check --all` runs them."
         )
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
 
