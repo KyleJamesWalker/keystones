@@ -90,3 +90,59 @@ def test_a_malformed_sidecar_the_target_needs_is_a_finding(gated, run_cli, capsy
     (gated / SIDECAR).write_text("# payout-rounding\n\nno toml block\n")
     assert run_cli("check", PAYOUT) == 1
     assert "error: [sidecar]" in capsys.readouterr().err
+
+
+# --- what the staged hook checks beyond the file --------------------------------
+
+
+def test_a_staged_keystones_twin_is_checked(repo, run_cli, capsys):
+    (repo / "copy.py").write_text(
+        "from decimal import ROUND_HALF_UP, Decimal\n\n\n"
+        "def compute_payout(amount: Decimal) -> Decimal:\n"
+        '    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)\n'
+    )
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "p",
+            "-m",
+            "w",
+            "--twin",
+            "copy.py::compute_payout",
+        )
+        == 0
+    )
+    (repo / "copy.py").write_text((repo / "copy.py").read_text().replace("0.01", "0.1"))
+    capsys.readouterr()
+    assert run_cli("check", PAYOUT) == 1
+    assert "[C17]" in capsys.readouterr().err
+
+
+def test_a_staged_keystones_dependency_is_checked(repo, run_cli, capsys):
+    (repo / "rates.py").write_text("BASE = 0.07\n")
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "p",
+            "-m",
+            "w",
+            "--depends",
+            "rates.py::BASE",
+        )
+        == 0
+    )
+    (repo / "rates.py").write_text("BASE = 0.09\n")
+    capsys.readouterr()
+    assert run_cli("check", PAYOUT) == 1
+    assert "[C11]" in capsys.readouterr().err
+
+
+def test_the_staged_summary_names_what_it_did_not_run(gated, run_cli, capsys):
+    assert run_cli("check", PAYOUT) == 0
+    out = capsys.readouterr().out
+    assert "1 keystone(s) verified" in out
+    assert "check --all" in out and "C9" in out

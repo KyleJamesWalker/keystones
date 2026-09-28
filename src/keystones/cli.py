@@ -79,7 +79,12 @@ def _staged_entries(
 
 def _check_paths(args, cfg: Config, paths: list[str]) -> int:
     """The staged hook: cost follows the files passed, not the size of the repo."""
-    from keystones.checks import c2_orphan_entries, c5_stored_source
+    from keystones.checks import (
+        c2_orphan_entries,
+        c5_stored_source,
+        c11_dependencies,
+        c17_twins,
+    )
 
     staged, findings = _staged_entries(cfg, paths)
     targets = {entry.target.split("::")[0].split("#")[0] for entry in staged.values()}
@@ -126,11 +131,19 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
             )
     findings += c5_stored_source(staged)
     findings += c2_orphan_entries(resolved, staged, skipped | unread)
+    # The staged keystones' own dependencies and twins: a copy or a helper
+    # drifting is what the hook is for, and both cost only the files named.
+    findings += c11_dependencies(cfg, list(entries.values()))
+    findings += c17_twins(cfg, list(entries.values()))
     if not resolved and not staged and not findings:
         return 0
     _report(findings, args.format or _default_format())
     if all(f.severity is Severity.NOTICE for f in findings):
-        print(f"keystones: {len(resolved)} keystone(s) verified")
+        print(
+            f"keystones: {len(resolved)} keystone(s) verified. Not run here: C2, "
+            "C6, C8, C9, C10, C12, and C11/C17 for keystones in other files; "
+            "`keystones check --all` runs them."
+        )
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
 
 
