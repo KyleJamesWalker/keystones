@@ -105,8 +105,17 @@ def _end_line(node, lines: list[str]) -> int:
         isinstance(node, yaml.CollectionNode) and not node.flow_style
     )
     end = mark.line if block else mark.line + 1
-    while end > node.start_mark.line + 1 and (
-        not lines[end - 1].strip() or lines[end - 1].lstrip().startswith("#")
+    # A keep-chomped block scalar (`|+`, `>+`) owns its trailing blank lines.
+    header = lines[node.start_mark.line] if node.start_mark.line < len(lines) else ""
+    keeps = (
+        isinstance(node, yaml.ScalarNode)
+        and node.style in ("|", ">")
+        and (header.rstrip().endswith("+"))
+    )
+    while (
+        not keeps
+        and end > node.start_mark.line + 1
+        and (not lines[end - 1].strip() or lines[end - 1].lstrip().startswith("#"))
     ):
         end -= 1
     return end
@@ -195,6 +204,10 @@ def _by_explicit_selector(src: str, qualname: str):
     return found
 
 
+def _unique(src: str, qualname: str) -> bool:
+    return sum(1 for k in _keys(src) if k[0] == qualname) == 1
+
+
 def _key_for(src: str, qualname: str, path: str):
     matches = [k for k in _keys(src) if k[0] == qualname]
     if not matches:
@@ -228,10 +241,14 @@ def resolve(src: str, marker: Marker) -> Target:
         following in comments or not lines[following - 1].strip()
     ):
         following += 1
-    for qualname, _value, start, end in _keys(src):
-        if start == following:
-            _key_for(src, qualname, marker.path)
-            return Target(marker.path, qualname, start, end)
+    # A keyed selector that is ambiguous falls back to the index alias, so the
+    # refusal's own suggestion works.
+    at_line = [k for k in _keys(src) if k[2] == following]
+    if at_line:
+        for qualname, _value, start, end in at_line:
+            if _unique(src, qualname):
+                return Target(marker.path, qualname, start, end)
+        _key_for(src, at_line[0][0], marker.path)
     raise ResolutionError(
         f"{marker.path}:{marker.lineno}: keystone '{marker.id}' attaches to nothing. "
         "Move it above a mapping key, or use a keystone:start / keystone:end region."

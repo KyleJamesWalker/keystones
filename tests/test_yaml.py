@@ -282,12 +282,12 @@ def test_an_index_selector_is_recorded_under_its_stable_name(repo, run_cli):
 
 
 @needs_yaml
-def test_two_items_with_the_same_name_are_refused(repo, run_cli, capsys):
+def test_two_items_with_the_same_name_adopt_by_index(repo, run_cli, capsys):
     (repo / "r.yaml").write_text(RECORDS.replace("name: a", "name: b"))
     pyproject = repo / "pyproject.toml"
     pyproject.write_text(pyproject.read_text() + YAML_TABLE)
-    assert run_cli("add", "--id", "second", "-m", "why.") == 1
-    assert "more than once" in capsys.readouterr().err
+    assert run_cli("add", "--id", "second", "-m", "why.") == 0
+    assert "items[1]" in capsys.readouterr().out
 
 
 @needs_yaml
@@ -340,12 +340,14 @@ def test_duplicate_names_in_an_unrelated_list_are_not_c6(repo, run_cli, capsys):
 
 
 @needs_yaml
-def test_a_duplicate_in_the_keystoned_list_is_c6(repo, run_cli, capsys):
+def test_a_duplicate_in_the_keystoned_list_falls_back_to_position(
+    repo, run_cli, capsys
+):
     (repo / "k.yaml").write_text(K8S.replace("    v: 1\n", "    v: 1\n  - name: x\n"))
-    assert run_cli("add", "--id", "pick", "-m", "why.") == 1
-    err = capsys.readouterr().err
-    assert "more than once" in err and "a[0]" in err
-    assert "Traceback" not in err
+    assert run_cli("add", "--id", "pick", "-m", "why.") == 0
+    out = capsys.readouterr().out
+    assert "a[0]" in out and "position" in out
+    assert run_cli("check", "--all", "--no-base") == 0
 
 
 @needs_yaml
@@ -413,3 +415,39 @@ def test_fix_refreshes_the_stored_source_when_only_its_text_moved(
     sidecar = (gated / SIDECAR).read_text()
     assert "replicas:    3" in sidecar
     assert "stored source refreshed" in sidecar
+
+
+@needs_yaml
+@pytest.mark.parametrize("style", ["|+", ">", ">-", ">+"])
+def test_every_block_scalar_style_passes_c5_after_add(repo, run_cli, capsys, style):
+    (repo / "b.yaml").write_text(
+        f"top:\n  # keystone(hash=yaml): spec\n  spec: {style}\n    line\n\n"
+        "  other: x\n"
+    )
+    assert run_cli("add", "--id", "spec", "-m", "why.") == 0
+    assert check(run_cli, capsys) == (0, "")
+
+
+@needs_yaml
+def test_a_value_on_the_last_line_without_a_newline_passes_c5(repo, run_cli, capsys):
+    (repo / "b.yaml").write_text("a:\n  # keystone(hash=yaml): k\n  b: 1")
+    assert run_cli("add", "--id", "k", "-m", "why.") == 0
+    assert check(run_cli, capsys) == (0, "")
+
+
+@needs_yaml
+def test_an_ambiguous_item_adopts_by_index_with_a_note(repo, run_cli, capsys):
+    """The refusal suggested the index form; it has to be accepted."""
+    (repo / "k.yaml").write_text(
+        "b:\n  - name: dup\n  # keystone(hash=yaml): second\n  - name: dup\n    v: 2\n"
+    )
+    assert run_cli("add", "--id", "second", "-m", "why.") == 0
+    out = capsys.readouterr().out
+    assert "b[1]" in out and "position" in out
+    assert (
+        'target = "k.yaml::b[1]"'
+        in (repo / "keystones" / "default" / "second.md").read_text()
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+    args = ("add", "k.yaml::b[0]", "--id", "first", "--hash", "yaml", "-m", "w")
+    assert run_cli(*args) == 0

@@ -67,7 +67,9 @@ def parse(path: Path, category: str) -> Entry:
         code_match = _CODE_RE.search(sections["canonical source"])
         if code_match:
             source_lang = code_match.group(2) or ""
-            source = code_match.group(3).rstrip("\n")
+            # Only the newline render adds before the fence comes off; a
+            # keep-chomped YAML scalar owns the blank lines before it.
+            source = code_match.group(3).removesuffix("\n")
 
     history = [
         line.strip()[2:].strip()

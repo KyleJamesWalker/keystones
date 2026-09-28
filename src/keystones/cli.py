@@ -572,6 +572,11 @@ def _adopt(args, cfg: Config) -> int:
     sidecar.write(cfg.sidecar_path(category, keystone_id), entry)
     _write_index(cfg)
     print(f"keystones: adopted '{keystone_id}' on {item.target}")
+    if re.search(r"\[\d+\]$", str(item.target)):
+        print(
+            "keystones: note: that item is named by position, so inserting an "
+            "item above it moves the keystone; give it a name, id or key to pin it"
+        )
     return 0
 
 
