@@ -107,6 +107,8 @@ class Config:
     languages: tuple[LanguageConfig, ...] = ()
     # Let a ruleset's required_reviewers stand in for CODEOWNERS in C8.
     codeowners_from_rulesets: bool = False
+    # Added to the built-in pytest and unittest ones. See C16.
+    disabling_decorators: tuple[str, ...] = ()
 
     @property
     def sidecar_root(self) -> Path:
@@ -447,6 +449,13 @@ def load(repo_root: Path | None = None) -> Config:
         raise ConfigError(
             "tool.keystones.codeowners_from_rulesets must be true or false"
         )
+    disabling = data.get("disabling_decorators", [])
+    if not isinstance(disabling, list) or not all(
+        isinstance(d, str) and d for d in disabling
+    ):
+        raise ConfigError(
+            "tool.keystones.disabling_decorators must be a list of dotted names"
+        )
     if "default" not in categories:
         categories = ("default", *categories)
     return Config(
@@ -456,4 +465,5 @@ def load(repo_root: Path | None = None) -> Config:
         categories=categories,
         languages=_languages(data),
         codeowners_from_rulesets=from_rulesets,
+        disabling_decorators=tuple(disabling),
     )

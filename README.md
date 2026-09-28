@@ -121,6 +121,16 @@ or a class attribute (`::Fees.SURCHARGE`). Either can also carry a keystone of
 its own, as long as it is bound once in its scope:
 `keystones add billing/helpers.py::BASE_RATE`.
 
+A keystoned test can be switched off without touching it, by a skip on its
+class or a `pytestmark`. That is [C16]: the sidecar records what disabled it at
+the last review, so switching it off, or back on, needs its owner. pytest and
+unittest skips are built in; add your own by dotted name:
+
+```toml
+[tool.keystones]
+disabling_decorators = ["acme.testing.quarantine"]
+```
+
 `review_every = "180d"` sets a staleness budget. There is deliberately no
 `reviewed` field: a stored date would be whatever `fix` last wrote, so the age
 comes from `git log` on the sidecar itself. Going stale warns and shows up in
@@ -182,6 +192,7 @@ The hash is taken over a canonical rendering of the AST node, not its text.
 | edit a `#` comment inside the keystone | needs a note, no owner review |
 | change a literal, a call, control flow | needs owner review |
 | edit a docstring | needs owner review, docstrings are AST nodes |
+| skip a keystoned test from its class or module | needs owner review, [C16] |
 | change a symbol listed in `depends` | needs owner review |
 | delete the marker | fails until the entry goes too |
 | move the marker onto a different definition | fails; the entry records its target |
@@ -474,7 +485,7 @@ Phase 2 in progress.
 
 | Shipped | Not yet |
 |---|---|
-| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness, C13 hasher mismatch, C14 hash kind | call-closure advisory, CI-written `reviewed_by` |
+| C1 orphan marker, C2 orphan entry, C3 semantic drift, C4 comment drift, C5 stored-source integrity, C6 uniqueness, C7 category, C8 CODEOWNERS coverage, C9 removal check, C10 index, C11 dependency drift, C12 staleness, C13 hasher mismatch, C14 hash kind, C16 disabled test | call-closure advisory, CI-written `reviewed_by` |
 | `check`, `fix`, `add`, `doctor`, `list`, `index`, `migrate` | call-closure advisory, CI-written `reviewed_by` |
 
 What each check catches, where it runs and how to clear it is in

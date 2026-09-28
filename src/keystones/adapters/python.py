@@ -14,6 +14,19 @@ from keystones.models import Marker, Scope, Target
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
+# Decorators that switch a test off. A repo adds its own in config.
+DISABLERS = frozenset(
+    {
+        "pytest.mark.skip",
+        "pytest.mark.skipif",
+        "pytest.mark.xfail",
+        "unittest.skip",
+        "unittest.skipIf",
+        "unittest.skipUnless",
+        "unittest.expectedFailure",
+    }
+)
+
 name = "python"
 hasher_id = HASHER_ID
 extensions = (".py", ".pyi")
@@ -265,6 +278,79 @@ def render_symbol(src: str, symbol: str) -> str | None:
         if name == symbol:
             return render(node)
     return None
+
+
+def _imports(tree: ast.Module) -> dict[str, str]:
+    """Local names bound by module-level imports, to the dotted name they stand for."""
+    names: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    names[alias.asname] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return names
+
+
+def _dotted(expr: ast.AST) -> str | None:
+    if isinstance(expr, ast.Call):
+        expr = expr.func
+    parts = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None
+    return ".".join([expr.id, *reversed(parts)])
+
+
+def _marks(body: list[ast.stmt]) -> list[ast.AST]:
+    """What a `pytestmark = ...` in this scope applies, one expression per mark."""
+    out: list[ast.AST] = []
+    for name, node in _assignments(body):
+        if name == "pytestmark" and node.value is not None:
+            value = node.value
+            out += value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+    return out
+
+
+def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]:
+    """Every decorator or mark that switches this definition off, and from where.
+
+    Only the definition's own decorators are inside its hash. One on an
+    enclosing class, or a `pytestmark`, disables it without moving a byte of it.
+    """
+    tree = ast.parse(src)
+    defs = dict(_definitions(tree))
+    node = defs.get(qualname)
+    if not isinstance(node, _DEFS):
+        return []
+    imports = _imports(tree)
+    wanted = DISABLERS | set(extra)
+    found: list[str] = []
+
+    def scan(exprs: list[ast.AST], where: str) -> None:
+        for expr in exprs:
+            written = _dotted(expr)
+            if written is None:
+                continue
+            head, _, rest = written.partition(".")
+            name = imports.get(head, head) + (f".{rest}" if rest else "")
+            if any(name == w or name.endswith(f".{w}") for w in wanted):
+                found.append(f"{name} on {where}")
+
+    scan(node.decorator_list, qualname)
+    parts = qualname.split(".")
+    for depth in range(len(parts) - 1, 0, -1):
+        prefix = ".".join(parts[:depth])
+        enclosing = defs.get(prefix)
+        if isinstance(enclosing, ast.ClassDef):
+            scan(enclosing.decorator_list, f"class {prefix}")
+            scan(_marks(enclosing.body), f"class {prefix} pytestmark")
+    scan(_marks(tree.body), "module pytestmark")
+    return sorted(set(found))
 
 
 def hasher_id_for_path(path: str) -> str:

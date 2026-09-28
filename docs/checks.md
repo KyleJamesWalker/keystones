@@ -14,7 +14,7 @@ staged sidecar also gets C2 and C5.
 
 **Severity.** An error fails the run. A warning is reported and passes. A
 notice reports a pass that went a non-default route. `--warn-only`, which the
-staged hook uses, turns C3, C4, C13, C14 and a target that cannot be hashed into
+staged hook uses, turns C3, C4, C13, C14, C16 and a target that cannot be hashed into
 warnings.
 
 ## Numbered checks
@@ -35,6 +35,7 @@ warnings.
 | C12 | Staleness | The sidecar was last committed longer ago than its `review_every`, or `review_every` is malformed. | warning; error if malformed | whole repo | Review the keystone and commit a change to its sidecar, such as a History line. The age comes from `git log`, not a stored date. |
 | C13 | Hasher mismatch | The entry was hashed by a different hasher (serializer, grammar or spec version) and the hashes disagree, so whether the code changed cannot be told. | error | staged, whole repo | Install the grammar pack the repo pins, or `keystones migrate`. |
 | C14 | Hash kind | The sidecar's `hash` differs from the basis the marker or `[[tool.keystones.language]]` gates on. | error | staged, whole repo | `keystones migrate` if the config changed on purpose; otherwise make the marker and the sidecar agree. |
+| C16 | Disabled test | A skip, skipif or xfail mark, or a unittest skip, now switches the keystoned definition off from outside its own hash: on an enclosing class, in a class or module `pytestmark`, or on the function itself. Also fires when one reviewed earlier is removed. `disabling_decorators` adds names to the built-in list. | error | staged, whole repo | `keystones fix --id <id> -m "<why>"` records the new set in `disabled_by`, so the owner reviews it. |
 
 A grammar version difference that still produces the same hash says nothing.
 Only a disagreement surfaces, and then as C13, never as C3.

@@ -202,6 +202,57 @@ def c3_c4_hashes(
     return out
 
 
+def disablers(cfg: Config, adapter, src: str, target) -> list[str]:
+    """What switches the target off from outside its hash; only Python can tell."""
+    find = getattr(adapter, "disablers", None)
+    if find is None or target.qualname is None or target.region:
+        return []
+    return find(src, target.qualname, cfg.disabling_decorators)
+
+
+def c16_disabled(
+    cfg: Config,
+    resolved: list[Resolved],
+    entries: dict[Key, Entry],
+    warn_only: bool = False,
+) -> list[Finding]:
+    """Switching a guard test off is a review event even when no byte of it moves."""
+    out = []
+    severity = Severity.WARNING if warn_only else Severity.ERROR
+    shared = shared_ids(resolved, entries)
+    for item in resolved:
+        entry = entries.get(item.marker.key)
+        if entry is None:
+            continue
+        src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
+        try:
+            now = disablers(cfg, item.adapter, src, item.target)
+        except SyntaxError:
+            continue
+        if now == sorted(entry.disabled_by):
+            continue
+        added = [d for d in now if d not in entry.disabled_by]
+        removed = [d for d in entry.disabled_by if d not in now]
+        what = (
+            f"is switched off by {', '.join(added)}"
+            if added
+            else f"is no longer switched off by {', '.join(removed)}"
+        )
+        out.append(
+            Finding(
+                "C16",
+                severity,
+                f"keystone '{entry.id}' {what}. Its owner must review this. "
+                f"run `keystones fix --id {ref(entry.key, shared)} "
+                '-m "<why>"`',
+                item.marker.path,
+                item.marker.lineno,
+                owner_hint=entry.category,
+            )
+        )
+    return out
+
+
 def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
     from keystones import adapters
 
@@ -338,6 +389,7 @@ def run_all(
     findings += c3_c4_hashes(cfg, resolved, entries, warn_only=warn_only)
     findings += c7_categories(cfg, resolved)
     findings += c7_category_agreement(resolved, entries)
+    findings += c16_disabled(cfg, resolved, entries, warn_only=warn_only)
     if not scoped:
         findings += c2_orphan_entries(resolved, entries, skipped)
         findings += c5_stored_source(entries)

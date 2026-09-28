@@ -12,7 +12,7 @@ from pathlib import Path
 from keystones import adapters, dependencies, gitref, sidecar
 from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
-from keystones.checks import run_all
+from keystones.checks import disablers, run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect, scan
 from keystones.models import Entry, Finding, Marker, Scope, Severity
@@ -212,7 +212,12 @@ def cmd_fix(args, cfg: Config) -> int:
         # An entry with no dependencies stores no depends_hash, so the absent
         # value has to compare equal to the empty one or every move looks semantic.
         stored_depends = entry.depends_hash or dependencies.EMPTY
-        semantic_changed = semantic != entry.semantic or depends_hash != stored_depends
+        disabled_by = disablers(cfg, item.adapter, src, item.target)
+        semantic_changed = (
+            semantic != entry.semantic
+            or depends_hash != stored_depends
+            or disabled_by != sorted(entry.disabled_by)
+        )
         if not semantic_changed and text == entry.text and target_str == entry.target:
             continue
         if semantic_changed and not args.message:
@@ -244,6 +249,7 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.hasher = item.adapter.hasher_id_for_path(item.marker.path)
         entry.source = item.adapter.canonical_source(src, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        entry.disabled_by = disabled_by
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
         changed.append(entry.id)
 
@@ -369,6 +375,7 @@ def _adopt(args, cfg: Config) -> int:
         review_every=args.review_every,
         depends=depends,
         depends_hash=depends_hash,
+        disabled_by=disablers(cfg, item.adapter, src, item.target),
         why=args.message,
         source=item.adapter.canonical_source(src, item.target),
         source_lang=_lang_for(item.marker.path),
@@ -632,6 +639,7 @@ def cmd_add(args, cfg: Config) -> int:
         review_every=args.review_every,
         depends=depends,
         depends_hash=depends_hash,
+        disabled_by=disablers(cfg, adapter, new_src, new_target),
         why=args.message,
         source=adapter.canonical_source(new_src, new_target),
         source_lang=_lang_for(rel),

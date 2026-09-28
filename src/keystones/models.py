@@ -64,6 +64,8 @@ class Entry:
     review_every: str | None = None
     depends: list[str] = field(default_factory=list)
     depends_hash: str = ""
+    # What switched this keystone's test off when its owner last reviewed it.
+    disabled_by: list[str] = field(default_factory=list)
     why: str = ""
     source: str = ""
     source_lang: str = "python"
