@@ -214,6 +214,8 @@ def test_a_grammar_mismatch_that_disagrees_is_c13_not_drift(repo, run_cli, capsy
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
     assert "[C13]" in err and "[C3]" not in err
+    assert "tree-sitter-language-pack 0.0.1 hashed the sidecar" in err
+    assert "additional_dependencies" in err
 
 
 # Pinned under the grammar pack the dev group installs. A change here means a

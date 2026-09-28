@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
+from itertools import zip_longest
 from pathlib import Path
 
 from keystones import adapters
@@ -169,10 +171,10 @@ def c3_c4_hashes(
                     "C13",
                     severity,
                     f"keystone '{entry.id}' was hashed by {entry.hasher}, this "
-                    f"install uses {expected_hasher}, and the two disagree. "
-                    "Whether the code changed cannot be told from here. Run "
-                    "`keystones migrate --check`, or install the grammar "
-                    "version this repo pins.",
+                    f"install uses {expected_hasher}, and the two disagree: "
+                    f"{hasher_difference(entry.hasher, expected_hasher)}. "
+                    "Whether the code changed cannot be told from here. "
+                    "`keystones migrate --check` says what would move.",
                     item.marker.path,
                     item.marker.lineno,
                     owner_hint=entry.category,
@@ -298,6 +300,72 @@ def c18_unreviewed(
             )
         )
     return out
+
+
+_VERSIONED = re.compile(r"^(?P<name>[^@/]+)@(?P<version>[^/]+)(?P<rest>(?:/[^/]*)*)$")
+_SERIALIZERS = {
+    "keystones-ts": "tree-sitter serializer",
+    "keystones-ast": "Python AST serializer",
+    "keystones-text": "text hasher",
+    "keystones-plugin": "plugin adapter",
+}
+_PIN = (
+    "Pin the version the repo chose, in additional_dependencies for the hook, "
+    "or move every keystone with `keystones migrate`"
+)
+
+
+def hasher_difference(recorded: str, expected: str) -> str:
+    """What moved between two hasher ids, in words that say what to do.
+
+    `keystones-ts/2+typescript@1.20.0/<spec>+dbt/1`: family and serializer,
+    then the grammar or parsing library with its version and spec digest,
+    then any preprocessor with its version.
+    """
+    (r_family, _, r_serial), *r_parts = [
+        seg.partition("/") if i == 0 else seg
+        for i, seg in enumerate(recorded.split("+"))
+    ]
+    (e_family, _, e_serial), *e_parts = [
+        seg.partition("/") if i == 0 else seg
+        for i, seg in enumerate(expected.split("+"))
+    ]
+    if r_family != e_family:
+        return (
+            f"the basis moved from {r_family.removeprefix('keystones-')} to "
+            f"{e_family.removeprefix('keystones-')}"
+        )
+    notes = []
+    if r_serial != e_serial:
+        label = _SERIALIZERS.get(r_family, "serializer")
+        notes.append(f"keystones' {label} moved from {r_serial} to {e_serial}")
+    for r_part, e_part in zip_longest(r_parts, e_parts, fillvalue=""):
+        if r_part == e_part:
+            continue
+        r_match, e_match = _VERSIONED.match(r_part), _VERSIONED.match(e_part)
+        if r_match and e_match and r_match["name"] == e_match["name"]:
+            name = r_match["name"]
+            if r_match["version"] != e_match["version"]:
+                package = (
+                    "tree-sitter-language-pack" if r_family == "keystones-ts" else name
+                )
+                notes.append(
+                    f"{package} {r_match['version']} hashed the sidecar and "
+                    f"{e_match['version']} is installed. {_PIN}"
+                )
+            if r_match["rest"] != e_match["rest"]:
+                what = "spec" if r_family == "keystones-ts" else "options"
+                notes.append(
+                    f"the {name} {what} in [[tool.keystones.language]] changed"
+                )
+            continue
+        r_name, _, r_version = r_part.partition("/")
+        e_name, _, e_version = e_part.partition("/")
+        if r_name and r_name == e_name:
+            notes.append(f"preprocessor {r_name} moved from {r_version} to {e_version}")
+        else:
+            notes.append(f"{r_part or 'nothing'} became {e_part or 'nothing'}")
+    return "; ".join(notes) or "the ids differ in a way keystones cannot name"
 
 
 def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
