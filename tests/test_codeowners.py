@@ -359,3 +359,14 @@ def test_shadowing_compares_against_the_most_specific_earlier_rule():
     rules = parse("/keystones/x/ @b\n/keystones/ @a\n")
     winner, hidden = shadowed(rules, "keystones/x/_probe.md")
     assert (winner.lineno, hidden.lineno) == (2, 1)
+
+
+def test_owner_case_does_not_make_an_override(repo, run_cli):
+    """GitHub logins and team slugs are case-insensitive."""
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @Org/Eng\n"
+        "/keystones/          @org/eng\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0

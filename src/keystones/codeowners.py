@@ -118,7 +118,7 @@ def shadowed(rules: list[Rule], path: str) -> tuple[Rule | None, Rule | None]:
     if (
         own is not None
         and _specificity(own) > _specificity(winner)
-        and set(own.owners) != set(winner.owners)
+        and {o.casefold() for o in own.owners} != {o.casefold() for o in winner.owners}
     ):
         return winner, own
     return winner, None
