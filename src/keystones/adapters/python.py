@@ -372,9 +372,9 @@ def _names_in(expr: ast.AST) -> list[str]:
 def _resolved_names(
     expr: ast.Call, values: dict[str, str], imports: dict, modules: set[str]
 ) -> str:
-    """`[SKIP=False; FLAG=True under \`if ...\`]` for every module-level name
-    an argument uses, followed transitively; a name bound nowhere in the
-    module is recorded as not statically known."""
+    """`[SKIP=False; FLAG=True under (if ...)]` for every module-level name an
+    argument uses, followed transitively; a name bound nowhere in the module
+    is recorded as not statically known."""
     parts: list[str] = []
     seen: set[str] = set()
     todo = [
