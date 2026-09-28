@@ -17,7 +17,7 @@ from functools import cache
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.adapters.masking import (  # noqa: F401
     ContractError,
     PreprocessorRefused,
@@ -34,7 +34,7 @@ class Unavailable(Exception):
     """The `all` extra is not installed."""
 
 
-class ParseError(ResolutionError):
+class ParseError(ParseFailure):
     """The grammar could not read the file.
 
     Hashing an error-recovery tree is worse than refusing one. Recovery shape

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.adapters.masking import preprocessed
 from keystones.config import ParserPlugin, Preprocessor, options_digest
 from keystones.hashing import digest
@@ -65,7 +65,7 @@ def _tree(spec: PluginSpec, src: str, fragment: bool = False):
     try:
         return parse(masked)
     except Unparseable as exc:
-        raise ResolutionError(f"does not parse as {spec.parser.name}: {exc}") from exc
+        raise ParseFailure(f"does not parse as {spec.parser.name}: {exc}") from exc
 
 
 def _comment_lines(tree) -> list[tuple[int, str]]:

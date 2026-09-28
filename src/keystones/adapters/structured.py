@@ -18,7 +18,7 @@ from functools import cache
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
@@ -84,7 +84,7 @@ def _documents(src: str) -> list:
     try:
         return list(yaml.compose_all(src))
     except yaml.YAMLError as exc:
-        raise ResolutionError(f"does not parse as YAML: {exc}") from exc
+        raise ParseFailure(f"does not parse as YAML: {exc}") from exc
 
 
 def _construct(node) -> object:

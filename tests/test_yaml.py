@@ -451,3 +451,18 @@ def test_an_ambiguous_item_adopts_by_index_with_a_note(repo, run_cli, capsys):
     assert run_cli("check", "--all", "--no-base") == 0
     args = ("add", "k.yaml::b[0]", "--id", "first", "--hash", "yaml", "-m", "w")
     assert run_cli(*args) == 0
+
+
+@needs_yaml
+def test_a_file_that_does_not_parse_is_one_finding_not_one_per_keystone(
+    values, run_cli, capsys
+):
+    """C2 per entry and a kind finding per marker all say the same thing."""
+    assert run_cli("add", "--id", "replicas", "-m", "why.") == 0
+    assert run_cli("add", f"{VALUES}::policy", "--id", "budget", "-m", "SLO.") == 0
+    path = values / VALUES
+    path.write_text(path.read_text() + "broken: [unclosed\n")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert err.count("[parse]") == 1
+    assert "[C2]" not in err and "[kind]" not in err

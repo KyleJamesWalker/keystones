@@ -9,7 +9,7 @@ from pathlib import Path
 from keystones import adapters
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
-from keystones.adapters.base import ResolutionError
+from keystones.adapters.base import ParseFailure, ResolutionError
 from keystones.adapters.masking import ContractError
 from keystones.adapters.treesitter import Unavailable
 from keystones.config import Config
@@ -189,12 +189,26 @@ def scan(
             try:
                 adapter = _adapter_for(rel, marker, preferred, readable, why)
             except adapters.UnknownKind as exc:
+                if not readable and not marker.hash_kind:
+                    # One finding for the file; a kind error per marker and a
+                    # C2 per entry would all repeat that it does not parse.
+                    if rel not in skipped:
+                        skipped.add(rel)
+                        findings.append(Finding("parse", Severity.ERROR, str(exc), rel))
+                    continue
                 findings.append(
                     Finding("kind", Severity.ERROR, str(exc), rel, marker.lineno)
                 )
                 continue
             try:
                 target = adapter.resolve(src, marker)
+            except ParseFailure as exc:
+                # Once per file: every marker in it fails for the same reason,
+                # and its entries are not orphans.
+                if rel not in skipped:
+                    skipped.add(rel)
+                    findings.append(Finding("parse", Severity.ERROR, str(exc), rel))
+                continue
             except (ResolutionError, SyntaxError, RegionError) as exc:
                 findings.append(
                     Finding("resolve", Severity.ERROR, str(exc), rel, marker.lineno)
