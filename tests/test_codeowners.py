@@ -328,3 +328,34 @@ def test_a_category_in_use_still_needs_an_owner(repo, run_cli, capsys):
     )
     assert run_cli("check", "--all", "--no-base") == 1
     assert "category 'default' has no CODEOWNERS owner" in capsys.readouterr().err
+
+
+def test_a_later_rule_changing_another_categorys_owner_is_not_this_ones_problem(
+    repo, run_cli
+):
+    """The category's own rule and the later glob agree on finance's owner;
+    what the glob changes is other categories, which is a separate question."""
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'categories = ["default", "finance"]', 'categories = ["finance"]'
+        )
+    )
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "*                    @org/eng\n"
+        "/keystones/          @org/eng\n"
+        "/keystones/finance/  @org/finance\n"
+        "/keystones/*/*.md    @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_shadowing_compares_against_the_most_specific_earlier_rule():
+    rules = parse("* @a\n/keystones/ @a\n/keystones/x/ @b\n/keystones/*/*.md @b\n")
+    winner, hidden = shadowed(rules, "keystones/x/_probe.md")
+    assert winner.lineno == 4 and hidden is None
+    rules = parse("/keystones/x/ @b\n/keystones/ @a\n")
+    winner, hidden = shadowed(rules, "keystones/x/_probe.md")
+    assert (winner.lineno, hidden.lineno) == (2, 1)

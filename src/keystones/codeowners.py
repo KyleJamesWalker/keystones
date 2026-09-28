@@ -110,10 +110,15 @@ def shadowed(rules: list[Rule], path: str) -> tuple[Rule | None, Rule | None]:
     if not matching:
         return None, None
     winner = matching[-1]
-    hidden = [
-        r
-        for r in matching[:-1]
-        if _specificity(r) > _specificity(winner)
-        and set(r.owners) != set(winner.owners)
-    ]
-    return winner, (hidden[-1] if hidden else None)
+    # Only the rule written for this path can be overridden: the most
+    # specific earlier one. A broad rule above it that names someone else is
+    # the ordinary shape of a CODEOWNERS file.
+    earlier = sorted(matching[:-1], key=_specificity)
+    own = earlier[-1] if earlier else None
+    if (
+        own is not None
+        and _specificity(own) > _specificity(winner)
+        and set(own.owners) != set(winner.owners)
+    ):
+        return winner, own
+    return winner, None

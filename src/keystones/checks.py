@@ -679,7 +679,7 @@ def _shadowed(what: str, rule, hidden, owners_rel: str | None) -> Finding:
         Severity.ERROR,
         f"{what} owned by '{rule.pattern}' (line {rule.lineno}), which comes "
         f"later and overrides '{hidden.pattern}' (line {hidden.lineno}). "
-        "CODEOWNERS is last-match-wins, so the broader rule silently took the "
+        "CODEOWNERS is last-match-wins, so the later rule silently took the "
         "path from the owner the specific rule named; move it above",
         owners_rel,
         rule.lineno,
