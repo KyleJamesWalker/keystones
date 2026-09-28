@@ -104,19 +104,35 @@ def markers(path: str, src: str) -> list[Marker]:
     return found
 
 
+def _loader():
+    """libyaml's loader when it is built in; the pure-Python one is about
+    ten times slower on the stored sources C5 re-reads."""
+    yaml = _yaml()
+    return getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def _load(text: str) -> object:
+    yaml = _yaml()
+    return yaml.load(text, Loader=_loader())
+
+
+def _load_all(text: str) -> list:
+    yaml = _yaml()
+    return list(yaml.load_all(text, Loader=_loader()))
+
+
 @lru_cache(maxsize=128)
 def _documents(src: str) -> list:
     """Composed once per file content within a run; every check re-asks."""
     yaml = _yaml()
     try:
-        return list(yaml.compose_all(src))
+        return list(yaml.compose_all(src, Loader=_loader()))
     except yaml.YAMLError as exc:
         raise ParseFailure(f"does not parse as YAML: {exc}") from exc
 
 
 def _construct(node) -> object:
-    yaml = _yaml()
-    return yaml.SafeLoader("").construct_object(node, deep=True)
+    return _loader()("").construct_object(node, deep=True)
 
 
 def canonical(value: object) -> str:
@@ -314,7 +330,7 @@ def _value_of(src: str, target: Target) -> object:
 def _region_value(body: str, target: str) -> object:
     yaml = _yaml()
     try:
-        docs = list(yaml.safe_load_all(textwrap.dedent(body)))
+        docs = _load_all(textwrap.dedent(body))
     except yaml.YAMLError as exc:
         raise ResolutionError(
             f"{target}: the region does not parse as YAML on its own: {exc}. "
@@ -327,7 +343,7 @@ def _slice_value(src: str, target: Target) -> object:
     """The node's value re-loaded from its own lines, as C5 re-loads the
     stored slice, so a file without a final newline reads the same both ways."""
     slice_ = canonical_source(src, target)
-    loaded = _yaml().safe_load(textwrap.dedent(slice_) + "\n")
+    loaded = _load(textwrap.dedent(slice_) + "\n")
     if isinstance(loaded, dict) and len(loaded) == 1:
         return next(iter(loaded.values()))
     if isinstance(loaded, list) and len(loaded) == 1:
@@ -383,16 +399,19 @@ def canonical_source(src: str, target: Target) -> str:
     return "\n".join(src.splitlines()[target.start - 1 : target.end])
 
 
+@lru_cache(maxsize=1024)
 def hash_stored_source(source: str, target: str) -> str:
+    """Cached: C5 asks for every entry on every run, and the answer for a
+    given stored source never changes within one."""
     if "#L" in target:
         return digest(canonical(_region_value(source, target)))
     if "::" not in target:
-        docs = list(_yaml().safe_load_all(source))
+        docs = _load_all(source)
         return digest(canonical(docs[0] if len(docs) == 1 else docs))
     # A stored node slice is `key: value` or `- item`, so the value is the one
     # entry of what it loads as. The slice lost its final newline, which a
     # clip-chomped block scalar keeps, so it goes back on before loading.
-    loaded = _yaml().safe_load(textwrap.dedent(source) + "\n")
+    loaded = _load(textwrap.dedent(source) + "\n")
     if isinstance(loaded, dict) and len(loaded) == 1:
         return digest(canonical(next(iter(loaded.values()))))
     if isinstance(loaded, list) and len(loaded) == 1:

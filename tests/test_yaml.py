@@ -548,9 +548,9 @@ def test_a_file_with_several_keystones_is_parsed_once(values, run_cli, monkeypat
     calls: list[int] = []
     original = yaml.compose_all
 
-    def counting(stream):
+    def counting(stream, **kwargs):
         calls.append(1)
-        return original(stream)
+        return original(stream, **kwargs)
 
     monkeypatch.setattr(yaml, "compose_all", counting)
     structured._documents.cache_clear()
@@ -567,3 +567,37 @@ def test_a_trailing_comment_on_a_scalar_keystone_is_c4(gated, run_cli, capsys):
     edit(gated, "# floor", "# ceiling")
     status, err = check(run_cli, capsys)
     assert status == 1 and "[C4]" in err
+
+
+# --- the C loader, and one load per stored source ---------------------------------
+
+
+@needs_yaml
+def test_the_c_loader_is_used_when_libyaml_is_there():
+    import yaml
+
+    from keystones.adapters import structured
+
+    expected = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    assert structured._loader() is expected
+
+
+@needs_yaml
+def test_a_stored_source_is_loaded_once_per_run(gated, run_cli, monkeypatch):
+
+    from keystones.adapters import structured
+
+    structured.hash_stored_source.cache_clear()
+    calls: list[int] = []
+    original = structured._load
+
+    def counting(text):
+        calls.append(1)
+        return original(text)
+
+    monkeypatch.setattr(structured, "_load", counting)
+    stored = (gated / SIDECAR).read_text().split("```yaml\n", 1)[1].split("\n```", 1)[0]
+    target = f"{VALUES}::spec.replicas"
+    structured.hash_stored_source(stored, target)
+    structured.hash_stored_source(stored, target)
+    assert len(calls) == 1
