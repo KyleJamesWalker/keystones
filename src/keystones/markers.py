@@ -80,8 +80,7 @@ def _split(qualifiers: str | None) -> tuple[Scope, str, str | None]:
 
 
 def parse_point(text: str, path: str, lineno: int) -> Marker | None:
-    match = START_RE.search(text)
-    if match:
+    if START_RE.search(text) or END_RE.search(text):
         return None
     match = POINT_RE.search(text)
     if not match:
