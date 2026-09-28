@@ -76,6 +76,30 @@ def check(run_cli, capsys, *args):
             "import pytest\n\n__test__ = False\n",
             "__test__ = False at module level",
         ),
+        (
+            "import pytest\n\n\nclass TestRounding:",
+            "import pytest\nimport sys\n\n"
+            "off = pytest.mark.skipif(sys.platform != 'x', "
+            "reason='r')\n\n\n@off\nclass TestRounding:",
+            "pytest.mark.skipif(sys.platform != 'x', reason='r') on class TestRounding",
+        ),
+        (
+            "import pytest\n",
+            "import pytest\nimport sys\n\nif sys.platform == 'x':\n"
+            "    pytest.skip('not here', allow_module_level=True)\n",
+            "pytest.skip('not here', allow_module_level=True) at module level "
+            "under `if sys.platform == 'x'`",
+        ),
+        (
+            "class TestRounding:\n",
+            "class TestRounding:\n    __test__ = 0\n\n",
+            "__test__ = 0 on class TestRounding",
+        ),
+        (
+            "import pytest\n",
+            "import pytest\n",
+            None,
+        ),
     ],
     ids=[
         "class-decorator",
@@ -86,6 +110,10 @@ def check(run_cli, capsys, *args):
         "module-level-skip",
         "class-__test__",
         "module-__test__",
+        "call-valued-alias",
+        "conditional-module-skip",
+        "falsy-__test__",
+        "nothing",
     ],
 )
 def test_a_skip_from_outside_the_function_is_c16(
@@ -181,3 +209,11 @@ def test_flipping_a_skipif_condition_is_c16(guarded, run_cli, capsys):
     status, err = check(run_cli, capsys)
     assert status == 1
     assert "switched off by pytest.mark.skipif(True, reason='x')" in err
+
+
+def test_a_test_switched_off_after_its_class_is_c16(guarded, run_cli, capsys):
+    path = guarded / "test_rounding.py"
+    path.write_text(path.read_text() + "\n\nTestRounding.__test__ = False\n")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "__test__ = False on class TestRounding" in err

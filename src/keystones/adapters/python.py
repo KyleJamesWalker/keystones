@@ -303,14 +303,39 @@ def _imports(tree: ast.Module) -> dict[str, str]:
                 names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
         elif isinstance(node, ast.Assign) and len(node.targets) == 1:
             target, written = node.targets[0], _dotted(node.value)
-            if (
-                isinstance(target, ast.Name)
-                and written
-                and not isinstance(node.value, ast.Call)
-            ):
+            if isinstance(target, ast.Name) and written:
                 head, _, rest = written.partition(".")
                 names[target.id] = names.get(head, head) + (f".{rest}" if rest else "")
     return names
+
+
+def _call_aliases(tree: ast.Module) -> dict[str, ast.Call]:
+    """`off = pytest.mark.skipif(...)`: the call behind a module-level name."""
+    return {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+    }
+
+
+def _statements(body: list[ast.stmt], guard: str = ""):
+    """Module-level statements reachable at import, with the `if` they sit under."""
+    for node in body:
+        if isinstance(node, ast.If):
+            cond = f" under `if {ast.unparse(node.test)}`"
+            yield from _statements(node.body, guard or cond)
+            yield from _statements(
+                node.orelse, guard or cond.replace("if ", "else of if ")
+            )
+        elif isinstance(node, ast.Try):
+            yield from _statements(node.body, guard)
+            for handler in node.handlers:
+                yield from _statements(handler.body, guard)
+        else:
+            yield node, guard
 
 
 def _arguments(expr: ast.AST) -> str:
@@ -358,6 +383,7 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
     if not isinstance(node, _DEFS):
         return []
     imports = _imports(tree)
+    calls = _call_aliases(tree)
     wanted = DISABLERS | set(extra)
     found: list[str] = []
 
@@ -372,19 +398,34 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
         for expr in exprs:
             name = resolved(expr)
             if name and any(name == w or name.endswith(f".{w}") for w in wanted):
-                found.append(f"{name}{_arguments(expr)} on {where}")
+                # A bare name may stand for a call made at module level.
+                call = calls.get(expr.id) if isinstance(expr, ast.Name) else expr
+                found.append(f"{name}{_arguments(call)} on {where}")
 
     def switches(body: list[ast.stmt], where: str) -> None:
         for name, node in _assignments(body):
             value = getattr(node, "value", None)
-            switched = isinstance(value, ast.Constant) and value.value is False
-            if name == "__test__" and switched:
-                found.append(f"__test__ = False {where}")
-        for node in body:
+            off = isinstance(value, ast.Constant) and not value.value
+            if name == "__test__" and off:
+                found.append(f"__test__ = {ast.unparse(value)} {where}")
+        for node, guard in _statements(body):
             if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 name = resolved(node.value)
                 if name in MODULE_SKIPS:
-                    found.append(f"{name}{_arguments(node.value)} {where}")
+                    found.append(f"{name}{_arguments(node.value)} {where}{guard}")
+            # `TestX.__test__ = False` written after the class.
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "__test__"
+                    and isinstance(target.value, ast.Name)
+                    and isinstance(value, ast.Constant)
+                    and not value.value
+                ):
+                    found.append(
+                        f"__test__ = {ast.unparse(value)} on class {target.value.id}"
+                    )
 
     parts = qualname.split(".")
     for depth in range(len(parts) - 1, 0, -1):
