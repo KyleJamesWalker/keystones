@@ -613,7 +613,10 @@ def _adopt(args, cfg: Config) -> int:
         return 1
     for finding in findings:
         print(
-            f"keystones: warning: elsewhere, {finding.format_plain()}", file=sys.stderr
+            "keystones: warning: "
+            + ("" if finding.path == item.marker.path else "elsewhere, ")
+            + finding.format_plain(),
+            file=sys.stderr,
         )
     if cfg.sidecar_path(category, keystone_id).exists():
         additions = list(getattr(args, "twins", None) or []), list(args.depends or [])

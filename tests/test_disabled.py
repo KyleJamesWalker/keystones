@@ -271,6 +271,7 @@ def test_a_plain_alias_on_the_test_is_recorded_so_it_cannot_turn_into_a_skip(
     edit(guarded, "off = pytest.mark.slow", "off = pytest.mark.skip")
     status, err = check(run_cli, capsys)
     assert status == 1 and "[C16]" in err
+    assert "decorator alias off changed: pytest.mark.slow -> pytest.mark.skip" in err
 
 
 @pytest.mark.parametrize(

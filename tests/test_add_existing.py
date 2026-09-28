@@ -72,7 +72,7 @@ def test_a_broken_marker_elsewhere_does_not_block_adopting_this_one(
     (repo / "other.py").write_text("# keystone(hash=): bad\ndef g():\n    return 1\n")
     assert run_cli("add", "--id", "payout-rounding", "-m", "GAAP rounding.") == 0
     err = capsys.readouterr().err
-    assert "other.py" in err and "warning" in err
+    assert "warning: elsewhere, other.py" in err
     assert (repo / SIDECAR).exists()
 
 

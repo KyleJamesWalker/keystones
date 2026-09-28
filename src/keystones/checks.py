@@ -258,6 +258,30 @@ def disablers(cfg: Config, adapter, src: str, target) -> list[str]:
     return find(src, target.qualname, cfg.disabling_decorators)
 
 
+def _disabled_change(added: list[str], removed: list[str]) -> str:
+    """One alias rebound reads as a change of alias, not as a skip appearing."""
+    pieces: list[str] = []
+    for new in list(added):
+        if " via " not in new:
+            continue
+        tail = new[new.index(" via ") :]
+        old = next((r for r in removed if r.endswith(tail)), None)
+        if old is None:
+            continue
+        alias = tail.split(" via ", 1)[1].split(" on ", 1)[0]
+        pieces.append(
+            f"decorator alias {alias} changed: {old[: -len(tail)]} -> "
+            f"{new[: -len(tail)]}"
+        )
+        added.remove(new)
+        removed.remove(old)
+    if added:
+        pieces.append(f"is switched off by {', '.join(added)}")
+    if removed:
+        pieces.append(f"is no longer switched off by {', '.join(removed)}")
+    return "; ".join(pieces)
+
+
 def c16_disabled(
     cfg: Config,
     resolved: list[Resolved],
@@ -281,11 +305,7 @@ def c16_disabled(
             continue
         added = [d for d in now if d not in entry.disabled_by]
         removed = [d for d in entry.disabled_by if d not in now]
-        what = (
-            f"is switched off by {', '.join(added)}"
-            if added
-            else f"is no longer switched off by {', '.join(removed)}"
-        )
+        what = _disabled_change(added, removed)
         out.append(
             Finding(
                 "C16",
