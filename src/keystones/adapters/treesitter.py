@@ -557,6 +557,19 @@ def _node_for(src: str, target: Target):
     raise ResolutionError(f"{target}: no longer present in {target.path}")
 
 
+# The bodies a local can sit in. A real definition has none above it.
+_BODIES = frozenset({"statement_block", "class_body"})
+
+
+def _inside_body(node) -> bool:
+    current = node.parent
+    while current is not None:
+        if current.type in _BODIES:
+            return True
+        current = current.parent
+    return False
+
+
 def _outermost(node, spec: LanguageSpec):
     """Climb wrappers so `export` and a const/let/var keyword are inside the hash.
 
@@ -623,8 +636,8 @@ def hash_stored_source(source: str, target: str) -> str:
         if not shelled.has_error:
             root = shelled
     for _name, node in _definitions(root, spec):
-        if spec.language in _JS_LIKE and _start_line(node, spec) != 1:
-            # A class field alone reads as an assignment; this is a local in it.
+        if spec.language in _JS_LIKE and _inside_body(node):
+            # A field or method alone reads as an expression; this is a local in it.
             break
         # Must render from the same node `hashes` does: the outermost wrapper.
         return digest(

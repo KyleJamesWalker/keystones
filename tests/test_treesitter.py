@@ -483,3 +483,20 @@ def test_a_class_field_keystone_end_to_end(repo, run_cli, capsys, path):
     (repo / path).write_text((repo / path).read_text().replace("= 2", "= 3"))
     assert run_cli("check", "--all", "--no-base") == 1
     assert "[C3] keystone 'handle' changed" in capsys.readouterr().err
+
+
+ONE_LINERS = {
+    "method": "class A {\n  // keystone: k\n  foo() { const x = 1; return x; }\n}\n",
+    "field": "class A {\n  // keystone: k\n  go = () => { const x = 1; return x }\n}\n",
+    "function": "// keystone: k\nfunction f() { const x = 1; return x; }\n",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ONE_LINERS))
+@pytest.mark.parametrize("path", ["a.js", "a.ts"])
+def test_a_one_line_body_with_a_local_rehashes_to_itself(path, shape):
+    """A local on the first line is not the definition the fragment stores."""
+    src = ONE_LINERS[shape]
+    target = ts.resolve(src, only(path, src))
+    stored = ts.canonical_source(src, target)
+    assert ts.hash_stored_source(stored, str(target)) == ts.hashes(src, target)[0]
