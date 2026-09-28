@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
-from functools import cache
+from functools import cache, lru_cache
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
@@ -62,12 +62,37 @@ def comment_prefix(path: str) -> str:
     return "#"
 
 
+def _scalar_lines(src: str) -> set[int]:
+    """Lines that are the body of a block scalar, where `#` is content."""
+    yaml = _yaml()
+    inside: set[int] = set()
+
+    def walk(node) -> None:
+        if isinstance(node, yaml.ScalarNode):
+            if node.style in ("|", ">"):
+                inside.update(range(node.start_mark.line + 2, node.end_mark.line + 1))
+        elif isinstance(node, yaml.MappingNode):
+            for _, value in node.value:
+                walk(value)
+        elif isinstance(node, yaml.SequenceNode):
+            for value in node.value:
+                walk(value)
+
+    try:
+        for document in _documents(src):
+            walk(document)
+    except ResolutionError:
+        return set()
+    return inside
+
+
 def _comment_lines(src: str) -> list[tuple[int, str]]:
-    """Whole-line comments only; a marker is always one of those."""
+    """Whole-line comments only, and not the body of a block scalar."""
+    inside = _scalar_lines(src)
     return [
         (lineno, line)
         for lineno, line in enumerate(src.splitlines(), start=1)
-        if line.lstrip().startswith("#")
+        if line.lstrip().startswith("#") and lineno not in inside
     ]
 
 
@@ -79,7 +104,9 @@ def markers(path: str, src: str) -> list[Marker]:
     return found
 
 
+@lru_cache(maxsize=128)
 def _documents(src: str) -> list:
+    """Composed once per file content within a run; every check re-asks."""
     yaml = _yaml()
     try:
         return list(yaml.compose_all(src))

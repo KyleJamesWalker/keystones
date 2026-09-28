@@ -223,6 +223,27 @@ def scan(
                     Finding("kind", Severity.ERROR, str(exc), rel, marker.lineno)
                 )
                 continue
+            if adapter is not preferred and hasattr(adapter, "markers"):
+                # The text scan found it; the basis's own scan decides whether
+                # it is a comment at all, as inside a YAML block scalar.
+                try:
+                    real = {m.lineno for m in adapter.markers(rel, src)}
+                except (ResolutionError, RegionError, MarkerError):
+                    real = None
+                if real is not None and marker.lineno not in real:
+                    findings.append(
+                        Finding(
+                            "marker",
+                            Severity.WARNING,
+                            f"{rel}:{marker.lineno}: looks like a keystone marker "
+                            "but is not a comment, so it attaches to nothing. "
+                            "Move it into a comment, or add `keystones: "
+                            "ignore-file` if it is only an example.",
+                            rel,
+                            marker.lineno,
+                        )
+                    )
+                    continue
             try:
                 target = adapter.resolve(src, marker)
             except ParseFailure as exc:

@@ -510,3 +510,50 @@ def test_an_entry_from_the_first_yaml_hasher_migrates_across(gated, run_cli):
     assert run_cli("migrate") == 0
     assert "keystones-yaml/2+" in sidecar.read_text()
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- a marker inside a block scalar, and one parse per file -----------------------
+
+
+@needs_yaml
+def test_a_marker_line_inside_a_block_scalar_warns_like_python(repo, run_cli, capsys):
+    (repo / "pod.yaml").write_text(
+        "spec:\n  # keystone(hash=yaml): real\n  replicas: 1\n  script: |\n"
+        "    # keystone(hash=yaml): fake\n    echo hi\n"
+    )
+    assert run_cli("add", "--id", "real", "-m", "why.") == 0
+    capsys.readouterr()
+    assert run_cli("check", "--all", "--no-base") == 0
+    err = capsys.readouterr().err
+    assert "pod.yaml:5: warning: [marker]" in err and "not a comment" in err
+
+
+@needs_yaml
+def test_the_ignore_directive_silences_the_scalar_warning(repo, run_cli, capsys):
+    (repo / "pod.yaml").write_text(
+        "# keystones: ignore-file\nspec:\n  script: |\n    # keystone: fake\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+    assert capsys.readouterr().err == ""
+
+
+@needs_yaml
+def test_a_file_with_several_keystones_is_parsed_once(values, run_cli, monkeypatch):
+    import yaml
+
+    from keystones.adapters import structured
+
+    structured._documents.cache_clear()
+    assert run_cli("add", "--id", "replicas", "-m", "why.") == 0
+    assert run_cli("add", f"{VALUES}::policy", "--id", "budget", "-m", "SLO.") == 0
+    calls: list[int] = []
+    original = yaml.compose_all
+
+    def counting(stream):
+        calls.append(1)
+        return original(stream)
+
+    monkeypatch.setattr(yaml, "compose_all", counting)
+    structured._documents.cache_clear()
+    assert run_cli("check", "--all", "--no-base") == 0
+    assert len(calls) == 1

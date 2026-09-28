@@ -550,7 +550,11 @@ def _adopt(args, cfg: Config) -> int:
     category = item.marker.category
     # A problem in the target's own file blocks; one elsewhere is somebody
     # else's, and must not stop this keystone from being adopted.
-    blocking = [f for f in findings if f.path == item.marker.path]
+    blocking = [
+        f
+        for f in findings
+        if f.path == item.marker.path and f.severity is Severity.ERROR
+    ]
     if blocking:
         _report(blocking, "plain", cfg.repo_root)
         return 1
