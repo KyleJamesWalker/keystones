@@ -94,7 +94,8 @@ def slug(repo_root: Path, repo: str | None = None) -> tuple[str, str]:
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         raise Unavailable(
-            "no origin remote; pass --repo owner/name or set GITHUB_REPOSITORY"
+            "no origin remote; set GITHUB_REPOSITORY=owner/name, or run "
+            "`keystones doctor --repo owner/name`"
         ) from exc
     match = _REMOTE_RE.search(url)
     if not match:

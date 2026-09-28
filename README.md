@@ -571,6 +571,11 @@ while the hashes still agree passes `check` silently by design; `migrate` is
 what refreshes it, so put `keystones migrate --check` next to `check --all` in
 CI to see drift in recorded ids before it matters.
 
+An entry adopted while its hasher had a known C5-at-birth bug, such as
+`hash=yaml` on a file with no final newline before 0.5.0, may read C3 once
+after upgrading where `migrate` cannot prove it from a stored source that was
+wrong to begin with. `keystones fix -m` clears it; the owner reviews the diff.
+
 ### What a hash does not see
 
 - A Python docstring is part of the AST, so editing one is C3.

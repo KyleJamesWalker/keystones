@@ -844,7 +844,8 @@ def cmd_add(args, cfg: Config) -> int:
             target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
         except ResolutionError as exc:
             print(
-                f"keystones: {exc} Gate it on text instead: --hash text",
+                f"keystones: {str(exc).rstrip('.')}. Gate it on text instead: "
+                "--hash text",
                 file=sys.stderr,
             )
             return 1

@@ -235,10 +235,10 @@ def scan(
                         Finding(
                             "marker",
                             Severity.WARNING,
-                            f"{rel}:{marker.lineno}: looks like a keystone marker "
-                            "but is not a comment, so it attaches to nothing. "
-                            "Move it into a comment, or add `keystones: "
-                            "ignore-file` if it is only an example.",
+                            "looks like a keystone marker but is not a comment, "
+                            "so it attaches to nothing. Move it into a comment, "
+                            "or add `keystones: ignore-file` if it is only an "
+                            "example.",
                             rel,
                             marker.lineno,
                         )
@@ -285,9 +285,9 @@ def _not_comments(
             Finding(
                 "marker",
                 Severity.WARNING,
-                f"{rel}:{lineno}: looks like a keystone marker but is not a "
-                "comment, so it attaches to nothing. Move it into a comment, or "
-                "add `keystones: ignore-file` if it is only an example.",
+                "looks like a keystone marker but is not a comment, so it "
+                "attaches to nothing. Move it into a comment, or add "
+                "`keystones: ignore-file` if it is only an example.",
                 rel,
                 lineno,
             )
