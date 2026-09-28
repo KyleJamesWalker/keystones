@@ -29,9 +29,7 @@ def _render_one(repo_root: Path, spec: str) -> str:
     if "::" not in spec:
         raise UnresolvedDependency(spec, "expected path/to/file.py::Symbol")
     rel, symbol = spec.split("::", 1)
-    adapter = adapters.for_path(rel)
-    if adapter is None:
-        raise UnresolvedDependency(spec, f"no adapter handles {rel}")
+    adapter = adapters.for_symbols(rel)
     path = repo_root / rel
     if not path.is_file():
         raise UnresolvedDependency(spec, f"{rel} does not exist")

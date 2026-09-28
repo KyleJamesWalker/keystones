@@ -24,7 +24,8 @@ lines. That is why those rules get deleted. A keystone protects a key function.
 
 ```bash
 pip install keystones          # Python only, zero dependencies
-pip install 'keystones[all]'   # adds TypeScript, JavaScript, Go, Terraform and SQL
+pip install 'keystones[all]'   # adds TypeScript, JavaScript, Go, Terraform, SQL and YAML
+pip install 'keystones[yaml]'  # YAML by meaning only
 ```
 
 As a pre-commit hook:
@@ -285,6 +286,31 @@ Whole-line comments inside a region are kept out of the semantic hash where the
 file type's comment leader is known, so editing one is [C4] and clears with a
 `fix` and no note. A type keystones cannot name a leader for hashes every line.
 
+### YAML by meaning
+
+`hash=yaml` gates a YAML file, a region, or one mapping key on the parsed
+document rather than its layout, so a reformat, a key reorder or a quote change
+is invisible and a comment edit is [C4]. It needs `pip install 'keystones[yaml]'`
+and is opt-in, because a repo already gating YAML on text keeps that basis until
+it says otherwise:
+
+```toml
+[[tool.keystones.language]]
+extensions = [".yaml", ".yml"]
+hash = "yaml"
+```
+
+```yaml
+spec:
+  # keystone: replicas
+  replicas: 3
+```
+
+That keystone is `values.yaml::spec.replicas` and covers that key's value. A key
+may also be named in `depends`. Switching a text keystone to `hash=yaml` is
+[C14] until `keystones migrate` proves the stored source still means the same
+thing. JSON has no comment syntax to carry a marker, so it is not covered.
+
 A file that documents markers rather than carrying them opts out with a
 `keystones: ignore-file` directive anywhere in it. This README has one.
 
@@ -303,6 +329,7 @@ keystones add --id vpc-peering-cidrs -m "Peering CIDRs are load bearing"
 | Go | func, method, type, const, region, file | yes, tree-sitter |
 | Terraform, HCL | block, region, file | yes, tree-sitter |
 | SQL | view, table, function, CTE, region, file | yes, tree-sitter |
+| YAML | mapping key at any depth, region, file | `hash=yaml`, PyYAML |
 | everything else | region, file | no, normalised text |
 
 Those are the built-in languages. Any other grammar the pack carries, such as

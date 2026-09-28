@@ -68,7 +68,11 @@ def test_kinds_for_a_parsed_extension_offer_text_too():
 
 
 def test_kinds_for_an_unparsed_extension_are_text_only():
-    assert adapters.kinds_for("net.yaml") == ("text",)
+    assert adapters.kinds_for("app.conf") == ("text",)
+
+
+def test_kinds_for_yaml_start_with_text():
+    assert adapters.kinds_for("net.yaml")[0] == "text"
 
 
 @needs_extra

@@ -236,6 +236,12 @@ def options_digest(*option_sets: tuple[tuple[str, object], ...]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def _structured_extensions() -> tuple[str, ...]:
+    from keystones.adapters import structured
+
+    return structured.extensions
+
+
 def _builtin_specs() -> dict[str, object]:
     from keystones.adapters import treesitter
 
@@ -441,6 +447,8 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
             raise ConfigError(f"{where}: hash must be a string")
         offered = preprocessor.name if preprocessor else named
         available = {"text"} | ({offered} if offered else set())
+        if named is None and all(ext in _structured_extensions() for ext in extensions):
+            available.add("yaml")
         if default_hash not in available:
             raise ConfigError(
                 f"{where}: hash '{default_hash}' is not a basis this table "
