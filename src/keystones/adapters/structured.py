@@ -109,23 +109,53 @@ def _end_line(node, lines: list[str]) -> int:
     return end
 
 
+# A list item is named by one of these keys when it has one, so inserting or
+# reordering items does not move the keystone. Otherwise by its index.
+ITEM_KEYS = ("name", "id", "key")
+
+
+def _item_selector(item, index: int) -> str:
+    yaml = _yaml()
+    if isinstance(item, yaml.MappingNode):
+        scalars = {
+            k.value: v.value
+            for k, v in item.value
+            if isinstance(k, yaml.ScalarNode) and isinstance(v, yaml.ScalarNode)
+        }
+        for key in ITEM_KEYS:
+            if key in scalars:
+                return f"[{key}={scalars[key]}]"
+    return f"[{index}]"
+
+
 def _keys(src: str) -> list[tuple[str, object, int, int]]:
-    """Every mapping key at any depth: (qualname, value node, start, end)."""
+    """Every mapping key and list item at any depth: (qualname, node, start, end).
+
+    A keyed item is listed under its selector and, as an alias, its index.
+    """
     yaml = _yaml()
     lines = src.splitlines()
     out: list[tuple[str, object, int, int]] = []
 
     def walk(node, prefix: str) -> None:
-        if not isinstance(node, yaml.MappingNode):
-            return
-        for key, value in node.value:
-            if not isinstance(key, yaml.ScalarNode):
-                continue
-            qualname = f"{prefix}.{key.value}" if prefix else str(key.value)
-            out.append(
-                (qualname, value, key.start_mark.line + 1, _end_line(value, lines))
-            )
-            walk(value, qualname)
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                if not isinstance(key, yaml.ScalarNode):
+                    continue
+                qualname = f"{prefix}.{key.value}" if prefix else str(key.value)
+                out.append(
+                    (qualname, value, key.start_mark.line + 1, _end_line(value, lines))
+                )
+                walk(value, qualname)
+        elif isinstance(node, yaml.SequenceNode):
+            for index, item in enumerate(node.value):
+                span = (item.start_mark.line + 1, _end_line(item, lines))
+                selector = _item_selector(item, index)
+                qualname = f"{prefix}{selector}"
+                out.append((qualname, item, *span))
+                if selector != f"[{index}]":
+                    out.append((f"{prefix}[{index}]", item, *span))
+                walk(item, qualname)
 
     for document in _documents(src):
         walk(document, "")
@@ -229,11 +259,23 @@ def hash_stored_source(source: str, target: str) -> str:
     if "::" not in target:
         docs = list(_yaml().safe_load_all(source))
         return digest(canonical(docs[0] if len(docs) == 1 else docs))
-    # A stored node slice is `key: value`, so the value is the one entry.
+    # A stored node slice is `key: value` or `- item`, so the value is the one
+    # entry of what it loads as.
     loaded = _yaml().safe_load(textwrap.dedent(source))
-    if not isinstance(loaded, dict) or len(loaded) != 1:
-        raise ResolutionError(f"{target}: stored source is not a single key")
-    return digest(canonical(next(iter(loaded.values()))))
+    if isinstance(loaded, dict) and len(loaded) == 1:
+        return digest(canonical(next(iter(loaded.values()))))
+    if isinstance(loaded, list) and len(loaded) == 1:
+        return digest(canonical(loaded[0]))
+    raise ResolutionError(f"{target}: stored source is not a single key or item")
+
+
+def aliases(src: str, qualname: str) -> set[str]:
+    """Every name for the node `qualname` names: a keyed item and its index."""
+    keys = _keys(src)
+    nodes = [node for name, node, *_ in keys if name == qualname]
+    if len(nodes) != 1:
+        return {qualname}
+    return {name for name, node, *_ in keys if node is nodes[0]}
 
 
 def render_symbol(src: str, symbol: str, path: str = "") -> str | None:

@@ -697,18 +697,24 @@ def cmd_add(args, cfg: Config) -> int:
     if qualname:
         marker = Marker(args.id, args.category, scope, rel, insert_at)
         try:
-            lands_on = adapter.resolve(new_src, marker).qualname
+            landed = adapter.resolve(new_src, marker)
         except ResolutionError:
-            lands_on = None
-        if lands_on != qualname:
+            landed = None
+        names = {landed.qualname} if landed else set()
+        if landed is not None and hasattr(adapter, "aliases"):
+            names |= adapter.aliases(new_src, landed.qualname)
+        if qualname not in names:
             path.write_text(src)
             print(
                 f"keystones: a marker above {qualname} would attach to "
-                f"{lands_on or 'nothing'}, which shares its first line. Move "
-                f"{qualname} onto its own line first.",
+                f"{landed.qualname if landed else 'nothing'}, which shares its "
+                f"first line. Move {qualname} onto its own line first.",
                 file=sys.stderr,
             )
             return 1
+        # The marker's own name for the target is what check resolves to, so
+        # an alias such as a list index is recorded under its stable selector.
+        new_target = landed
     try:
         semantic, text = adapter.hashes(new_src, new_target)
     except ResolutionError as exc:

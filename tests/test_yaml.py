@@ -208,3 +208,83 @@ def test_a_marker_qualifier_asks_for_yaml_without_a_table(repo, run_cli, capsys)
     assert 'hash = "yaml"' in (repo / SIDECAR).read_text()
     edit(repo, "  replicas: 3", "  replicas:    3")
     assert check(run_cli, capsys)[0] == 0
+
+
+# --- sequences ---------------------------------------------------------------
+
+RECORDS = """items:
+  - name: a
+    value: 1
+  # keystone: second
+  - name: b
+    value: 2
+ports:
+  - 80
+  # keystone: https
+  - 443
+"""
+
+
+@pytest.fixture
+def records(repo, run_cli):
+    (repo / "r.yaml").write_text(RECORDS)
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + YAML_TABLE)
+    assert run_cli("add", "--id", "second", "-m", "why.") == 0
+    assert run_cli("add", "--id", "https", "-m", "why.") == 0
+    return repo
+
+
+@needs_yaml
+def test_a_list_item_gets_a_stable_selector(records):
+    assert (
+        'target = "r.yaml::items[name=b]"'
+        in (records / "keystones" / "default" / "second.md").read_text()
+    )
+    assert (
+        'target = "r.yaml::ports[1]"'
+        in (records / "keystones" / "default" / "https.md").read_text()
+    )
+
+
+@needs_yaml
+def test_an_item_edit_is_c3_and_a_sibling_edit_is_not(records, run_cli, capsys):
+    path = records / "r.yaml"
+    path.write_text(RECORDS.replace("value: 1", "value: 9"))
+    assert check(run_cli, capsys)[0] == 0
+    path.write_text(RECORDS.replace("value: 2", "value: 9"))
+    status, err = check(run_cli, capsys)
+    assert status == 1 and "[C3] keystone 'second'" in err
+
+
+@needs_yaml
+def test_reordering_items_keeps_a_keyed_selector_on_its_item(records, run_cli):
+    (records / "r.yaml").write_text(
+        "items:\n  # keystone: second\n  - name: b\n    value: 2\n  - name: a\n"
+        "    value: 1\nports:\n  - 80\n  # keystone: https\n  - 443\n"
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_yaml
+def test_an_index_selector_is_recorded_under_its_stable_name(repo, run_cli):
+    """`items[0]` is accepted, and the entry names the item by key so a later
+    reorder does not retarget it."""
+    unmarked = RECORDS.replace("  # keystone: second\n", "")
+    (repo / "r.yaml").write_text(unmarked.replace("  # keystone: https\n", ""))
+    args = ("add", "r.yaml::items[0]", "--id", "first", "--hash", "yaml", "-m", "w")
+    assert run_cli(*args) == 0
+    assert (
+        'target = "r.yaml::items[name=a]"'
+        in (repo / "keystones" / "default" / "first.md").read_text()
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_yaml
+def test_two_items_with_the_same_name_are_refused(repo, run_cli, capsys):
+    (repo / "r.yaml").write_text(RECORDS.replace("name: a", "name: b"))
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + YAML_TABLE)
+    assert run_cli("add", "--id", "second", "-m", "why.") == 1
+    assert "more than once" in capsys.readouterr().err
