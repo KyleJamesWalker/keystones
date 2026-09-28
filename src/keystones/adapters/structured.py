@@ -27,7 +27,7 @@ extensions = (".yaml", ".yml")
 KIND = "yaml"
 # Regions parse on their own here, so they are not handed to the text adapter.
 hashes_regions = True
-SERIALIZER_VERSION = 1
+SERIALIZER_VERSION = 2
 
 
 @cache

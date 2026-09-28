@@ -81,7 +81,7 @@ def test_a_node_keystone_covers_the_key_and_records_the_basis(gated):
     sidecar = (gated / SIDECAR).read_text()
     assert f'target = "{VALUES}::spec.replicas"' in sidecar
     assert 'hash = "yaml"' in sidecar
-    assert "keystones-yaml/1+pyyaml@" in sidecar
+    assert "keystones-yaml/2+pyyaml@" in sidecar
     assert "replicas: 3" in sidecar
 
 
@@ -303,7 +303,7 @@ def test_a_yaml_region_records_the_yaml_hasher(values, run_cli):
     assert run_cli("add", "--id", "capacity", "-m", "Capacity.") == 0
     sidecar = (values / "keystones" / "default" / "capacity.md").read_text()
     assert 'hash = "yaml"' in sidecar
-    assert "keystones-yaml/1+pyyaml@" in sidecar
+    assert "keystones-yaml/2+pyyaml@" in sidecar
     assert run_cli("check", "--all", "--no-base") == 0
 
 
@@ -497,3 +497,16 @@ def test_a_node_at_the_end_of_the_file_or_with_keep_chomping_passes_c5(
     sidecar = next((repo / "keystones" / "default").glob("*.md")).read_text()
     assert f'target = "e.yaml::{target}"' in sidecar
     assert check(run_cli, capsys) == (0, "")
+
+
+@needs_yaml
+def test_an_entry_from_the_first_yaml_hasher_migrates_across(gated, run_cli):
+    """A slice that moved under the new end-of-file handling must be proved
+    across by migrate, not paged to its owner as drift."""
+    sidecar = gated / SIDECAR
+    sidecar.write_text(
+        sidecar.read_text().replace("keystones-yaml/2+", "keystones-yaml/1+")
+    )
+    assert run_cli("migrate") == 0
+    assert "keystones-yaml/2+" in sidecar.read_text()
+    assert run_cli("check", "--all", "--no-base") == 0
