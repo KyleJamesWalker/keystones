@@ -127,6 +127,18 @@ such as `fees.ts::FEE`. Terraform and HCL also take attributes: a Terragrunt
 `main.tf::locals.rate` or
 `main.tf::resource.google_compute_network_peering.prod.export_routes`.
 
+The same predicate often lives in more than one file: one query per ad
+platform, or a helper copied into a reporting job. Name the copies as twins and
+they are held to the reviewed code, so a copy drifting on its own is [C17]:
+
+```bash
+keystones add queries/google/spend.sql::spend --id spend-predicate \
+    --twin queries/dv360/spend.sql::spend
+```
+
+A twin is hashed with the keystone's own basis, so it must be the same
+language and shape. Changing every copy together is one review, through `fix`.
+
 A keystoned test can be switched off without touching it, by a skip on its
 class or a `pytestmark`. That is [C16]: the sidecar records what disabled it at
 the last review, so switching it off, or back on, needs its owner. pytest and

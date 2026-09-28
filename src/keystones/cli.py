@@ -144,6 +144,26 @@ def cmd_check(args, cfg: Config) -> int:
     return 1 if errors else 0
 
 
+def _twins_mismatch(
+    cfg: Config, specs: list[str], adapter, rel: str, semantic: str
+) -> str | None:
+    """Why these twins cannot be recorded against this hash, or None."""
+    from keystones import twins
+
+    kind = adapter.kind_for_path(rel)
+    for spec in specs:
+        try:
+            actual, _ = twins.semantic(cfg.repo_root, spec, kind)
+        except twins.UnresolvedTwin as exc:
+            return f"twin {exc}"
+        if actual != semantic:
+            return (
+                f"twin {spec} does not match the keystone: the two hash "
+                "differently, so one of them is not a copy of the other"
+            )
+    return None
+
+
 class AmbiguousId(Exception):
     """A bare id that exists in more than one category."""
 
@@ -378,6 +398,11 @@ def _adopt(args, cfg: Config) -> int:
     except dependencies.UnresolvedDependency as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
+    twin_specs = list(getattr(args, "twins", None) or [])
+    problem = _twins_mismatch(cfg, twin_specs, item.adapter, item.marker.path, semantic)
+    if problem:
+        print(f"keystones: {problem}", file=sys.stderr)
+        return 1
     entry = Entry(
         id=keystone_id,
         category=category,
@@ -389,6 +414,7 @@ def _adopt(args, cfg: Config) -> int:
         review_every=args.review_every,
         depends=depends,
         depends_hash=depends_hash,
+        twins=twin_specs,
         disabled_by=disablers(cfg, item.adapter, src, item.target),
         why=args.message,
         source=item.adapter.canonical_source(src, item.target),
@@ -651,6 +677,12 @@ def cmd_add(args, cfg: Config) -> int:
         path.write_text(src)
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
+    twin_specs = list(args.twins or [])
+    problem = _twins_mismatch(cfg, twin_specs, adapter, rel, semantic)
+    if problem:
+        path.write_text(src)
+        print(f"keystones: {problem}", file=sys.stderr)
+        return 1
     entry = Entry(
         id=args.id,
         category=args.category,
@@ -662,6 +694,7 @@ def cmd_add(args, cfg: Config) -> int:
         review_every=args.review_every,
         depends=depends,
         depends_hash=depends_hash,
+        twins=twin_specs,
         disabled_by=disablers(cfg, adapter, new_src, new_target),
         why=args.message,
         source=adapter.canonical_source(new_src, new_target),
@@ -836,6 +869,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="hash_kind",
         help="basis to gate on: 'text', or a grammar name. Auto when the file "
         "has exactly one readable basis.",
+    )
+    add.add_argument(
+        "--twin",
+        dest="twins",
+        action="append",
+        help="a same-repo copy that must keep hashing like this keystone, "
+        "path.py::Symbol or path for a whole file; repeatable",
     )
     add.add_argument("-m", "--message", help="why this is load-bearing")
     add.add_argument("--review-every", help="staleness budget, e.g. 180d")

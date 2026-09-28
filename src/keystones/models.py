@@ -66,6 +66,8 @@ class Entry:
     depends_hash: str = ""
     # What switched this keystone's test off when its owner last reviewed it.
     disabled_by: list[str] = field(default_factory=list)
+    # Same-repo copies that must keep hashing like this keystone. See C17.
+    twins: list[str] = field(default_factory=list)
     why: str = ""
     source: str = ""
     source_lang: str = "python"

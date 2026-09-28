@@ -515,6 +515,7 @@ def run_all(
         findings += c6_shadowed_targets(cfg, resolved)
         findings += c8_ownership(cfg)
         findings += c11_dependencies(cfg, entry_list)
+        findings += c17_twins(cfg, entry_list)
         findings += stale_report(cfg, entry_list)
         findings += c10_index(cfg, entries)
         if base:
@@ -655,6 +656,12 @@ def c8_ownership(cfg: Config) -> list[Finding]:
             )
         )
     return [*rulesets.findings, *findings]
+
+
+def c17_twins(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
+    from keystones import twins
+
+    return twins.check(cfg.repo_root, entry_list)
 
 
 def c11_dependencies(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
