@@ -141,3 +141,25 @@ def test_moving_a_keystone_to_another_category_is_a_removal(
     err = capsys.readouterr().err
     assert "keystone 'payout-rounding' was removed" in err
     assert "owner of category 'finance'" in err
+
+
+def test_the_base_inventory_reads_only_files_that_held_a_marker(
+    repo, run_cli, monkeypatch
+):
+    """Reading every supported file at the base ref is what made --base ten
+    times slower than --no-base."""
+    from keystones import gitref
+
+    (repo / "quiet.py").write_text("def q():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "quiet"], cwd=repo, check=True)
+    read: list[str] = []
+    original = gitref.read_at
+
+    def counting(root, ref, path):
+        read.append(path)
+        return original(root, ref, path)
+
+    monkeypatch.setattr(gitref, "read_at", counting)
+    assert run_cli("check", "--all", "--base", "HEAD") == 0
+    assert "quiet.py" not in read
