@@ -908,7 +908,7 @@ def cmd_migrate(args, cfg: Config) -> int:
 
     unreconciled = twins.check(cfg.repo_root, [e for e in migrated if e.twins])
     for finding in unreconciled:
-        print(f"keystones: needs review: {finding.message}", file=sys.stderr)
+        print(f"keystones: needs review: twin {finding.message}", file=sys.stderr)
     if blocked:
         print(
             f"keystones: {len(blocked)} left alone; the code changed too, so they need "
