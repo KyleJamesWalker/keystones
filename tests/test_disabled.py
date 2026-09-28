@@ -271,3 +271,42 @@ def test_a_plain_alias_on_the_test_is_recorded_so_it_cannot_turn_into_a_skip(
     edit(guarded, "off = pytest.mark.slow", "off = pytest.mark.skip")
     status, err = check(run_cli, capsys)
     assert status == 1 and "[C16]" in err
+
+
+@pytest.mark.parametrize(
+    ("setup", "flip"),
+    [
+        ("SKIP = False\n", ("SKIP = False", "SKIP = True")),
+        ("FLAG = False\nSKIP = FLAG\n", ("FLAG = False", "FLAG = True")),
+        (
+            "import os\nSKIP = False\nif os.environ.get('X'):\n    SKIP = True\n",
+            ("SKIP = True", "SKIP = False"),
+        ),
+    ],
+    ids=["direct", "chained", "conditional"],
+)
+def test_a_flipped_module_constant_behind_a_direct_mark_is_c16(
+    guarded, run_cli, capsys, setup, flip
+):
+    edit(guarded, "import pytest\n", "import pytest\n" + setup)
+    edit(
+        guarded,
+        "    def test_guard",
+        "    @pytest.mark.skipif(SKIP, reason='r')\n    def test_guard",
+    )
+    assert run_cli("fix", "--id", "guard", "-m", "Flagged.") == 0
+    assert check(run_cli, capsys)[0] == 0
+    edit(guarded, *flip)
+    status, err = check(run_cli, capsys)
+    assert status == 1 and "[C16]" in err
+
+
+def test_a_condition_that_cannot_be_read_is_recorded_as_such(guarded, run_cli):
+    edit(guarded, "import pytest\n", "import pytest\nfrom flags import SKIP\n")
+    edit(
+        guarded,
+        "    def test_guard",
+        "    @pytest.mark.skipif(SKIP)\n    def test_guard",
+    )
+    assert run_cli("fix", "--id", "guard", "-m", "Flagged.") == 0
+    assert "not statically known" in (guarded / SIDECAR).read_text()
