@@ -91,8 +91,13 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
         for category in cfg.categories:
             key = (category, item.marker.id)
             path = cfg.sidecar_path(*key)
-            if key not in entries and path.is_file():
+            if key in entries or not path.is_file():
+                continue
+            try:
                 entries[key] = sidecar.parse(path, category)
+            except (sidecar.SidecarError, ValueError) as exc:
+                rel = str(path.relative_to(cfg.repo_root))
+                findings.append(Finding("sidecar", Severity.ERROR, str(exc), rel))
     findings += run_all(
         cfg,
         resolved,

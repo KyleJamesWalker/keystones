@@ -84,3 +84,9 @@ def test_the_staged_path_reads_only_what_it_is_given(gated, run_cli, monkeypatch
     monkeypatch.setattr(sidecar, "load_all", everything)
     (gated / "notes.txt").write_text("hi\n")
     assert run_cli("check", PAYOUT, SIDECAR, "notes.txt") == 0
+
+
+def test_a_malformed_sidecar_the_target_needs_is_a_finding(gated, run_cli, capsys):
+    (gated / SIDECAR).write_text("# payout-rounding\n\nno toml block\n")
+    assert run_cli("check", PAYOUT) == 1
+    assert "error: [sidecar]" in capsys.readouterr().err
