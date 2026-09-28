@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import io
 import tokenize
+import warnings
 
 from keystones import markers as marker_grammar
 from keystones.adapters import fallback
@@ -35,6 +36,13 @@ hasher_id = HASHER_ID
 extensions = (".py", ".pyi")
 
 
+def _parse(src: str) -> ast.Module:
+    """A SyntaxWarning in the file, an invalid escape say, is not ours to print."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        return ast.parse(src)
+
+
 def _tokens(src: str) -> list[tokenize.TokenInfo]:
     try:
         return list(tokenize.generate_tokens(io.StringIO(src).readline))
@@ -60,7 +68,7 @@ def markers(path: str, src: str) -> list[Marker]:
         return []
     # A file that does not parse has no definitions to attach to; saying so
     # here beats an orphan-entry report that points at the sidecar.
-    ast.parse(src)
+    _parse(src)
     found = [
         m
         for m in marker_grammar.scan_lines(path, src, _comments(src))[0]
@@ -130,7 +138,7 @@ def resolve(src: str, marker: Marker) -> Target:
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)
-    tree = ast.parse(src)
+    tree = _parse(src)
     if marker.scope is Scope.FILE:
         end = (
             max((getattr(n, "end_lineno", 1) or 1) for n in tree.body)
@@ -165,7 +173,7 @@ def resolve(src: str, marker: Marker) -> Target:
 
 
 def _node_for(src: str, target: Target) -> ast.AST:
-    tree = ast.parse(src)
+    tree = _parse(src)
     if target.qualname is None:
         return tree
     for qualname, node in _definitions(tree):
@@ -209,7 +217,7 @@ def hash_stored_source(source: str, target: str) -> str:
     """Re-hash stored canonical source. Backs C5 and hasher migration proofs."""
     if "#L" in target:
         return fallback.hash_stored_source(source, target)
-    tree = ast.parse(source)
+    tree = _parse(source)
     if "::" not in target:
         return semantic_hash(tree)
     if not tree.body:
@@ -218,7 +226,7 @@ def hash_stored_source(source: str, target: str) -> str:
 
 
 def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
-    tree = ast.parse(src)
+    tree = _parse(src)
     for name, node in _definitions(tree):
         if name == qualname:
             return Target(path, name, _start_line(node), node.end_lineno)
@@ -276,7 +284,7 @@ def _constant(tree: ast.Module, name: str, path: str) -> ast.AST | None:
 
 def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
     """Canonical text for a `depends` target: a definition, constant or attribute."""
-    tree = ast.parse(src)
+    tree = _parse(src)
     for qualname, node in _definitions(tree):
         if qualname == symbol:
             return render(node)
@@ -377,7 +385,7 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
     left out here. One on an enclosing class, or a `pytestmark`, disables it
     without moving a byte of it.
     """
-    tree = ast.parse(src)
+    tree = _parse(src)
     defs = dict(_definitions(tree))
     node = defs.get(qualname)
     if not isinstance(node, _DEFS):
@@ -427,6 +435,13 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
                         f"__test__ = {ast.unparse(value)} on class {target.value.id}"
                     )
 
+    # The function's own decorators are inside its hash, except through an
+    # alias: `@off` hashes as the name, and the mark behind it lives outside.
+    for expr in node.decorator_list:
+        if isinstance(expr, ast.Name) and expr.id in calls:
+            name = resolved(calls[expr.id])
+            if name and any(name == w or name.endswith(f".{w}") for w in wanted):
+                found.append(f"{name}{_arguments(calls[expr.id])} on {qualname}")
     parts = qualname.split(".")
     for depth in range(len(parts) - 1, 0, -1):
         prefix = ".".join(parts[:depth])
@@ -452,7 +467,7 @@ def duplicate_qualnames(path: str, src: str) -> set[str]:
     """
     seen: set[str] = set()
     dupes: set[str] = set()
-    for qualname, _ in _definitions(ast.parse(src)):
+    for qualname, _ in _definitions(_parse(src)):
         if qualname in seen:
             dupes.add(qualname)
         seen.add(qualname)

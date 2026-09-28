@@ -217,3 +217,28 @@ def test_a_test_switched_off_after_its_class_is_c16(guarded, run_cli, capsys):
     status, err = check(run_cli, capsys)
     assert status == 1
     assert "__test__ = False on class TestRounding" in err
+
+
+def test_an_alias_on_the_function_itself_is_c16_when_flipped(guarded, run_cli, capsys):
+    """The function's hash holds only the name `off`; the alias's arguments
+    live at module level, outside it."""
+    edit(
+        guarded, "import pytest\n", "import pytest\n\noff = pytest.mark.skipif(False)\n"
+    )
+    edit(guarded, "    def test_guard", "    @off\n    def test_guard")
+    assert run_cli("fix", "--id", "guard", "-m", "Aliased mark.") == 0
+    assert check(run_cli, capsys)[0] == 0
+    edit(guarded, "skipif(False)", "skipif(True)")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert (
+        "[C16]" in err and "pytest.mark.skipif(True) on TestRounding.test_guard" in err
+    )
+
+
+def test_ast_warnings_in_a_keystoned_file_stay_quiet(repo, run_cli, recwarn):
+    path = repo / "billing" / "payout.py"
+    path.write_text('# keystone: p\ndef compute_payout(x):\n    return "\\\\d"\n')
+    run_cli("add", "--id", "p", "-m", "w")
+    run_cli("check", "--all", "--no-base")
+    assert not [w for w in recwarn if issubclass(w.category, SyntaxWarning)]

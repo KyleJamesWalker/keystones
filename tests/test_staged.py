@@ -178,3 +178,16 @@ def test_a_path_that_does_not_exist_is_an_error(gated, run_cli, capsys):
     """A typo in a hook's file list must not pass as clean."""
     assert run_cli("check", "nope.py") == 1
     assert "nope.py" in capsys.readouterr().err
+
+
+def test_a_clean_twin_only_path_says_what_it_verified(repo, run_cli, capsys):
+    (repo / "copy.py").write_text(
+        "from decimal import ROUND_HALF_UP, Decimal\n\n\n"
+        "def compute_payout(amount: Decimal) -> Decimal:\n"
+        '    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)\n'
+    )
+    args = ("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w")
+    assert run_cli(*args, "--twin", "copy.py::compute_payout") == 0
+    capsys.readouterr()
+    assert run_cli("check", "copy.py") == 0
+    assert "verified through twins or depends" in capsys.readouterr().out

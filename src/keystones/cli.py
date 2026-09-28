@@ -173,7 +173,10 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
                 linked.setdefault(entry.key, entry)
     findings += c11_dependencies(cfg, list(linked.values()))
     findings += c17_twins(cfg, list(linked.values()))
+    through = len(linked) - len(entries)
     if not resolved and not staged and not findings:
+        if through:
+            print(f"keystones: {through} keystone(s) verified through twins or depends")
         return 0
     _report(findings, args.format or _default_format(), cfg.repo_root)
     if all(f.severity is Severity.NOTICE for f in findings):
