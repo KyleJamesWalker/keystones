@@ -342,3 +342,39 @@ def test_an_unreadable_rules_endpoint_is_reported_not_treated_as_no_rules(
     found = errors(doctor.run(tmp_path))
     assert any("HTTP 403" in f.message for f in found)
     assert not any("no protection and no ruleset" in f.message for f in found)
+
+
+# --- every ruleset is named ------------------------------------------------
+
+
+def test_a_ruleset_beside_classic_protection_is_still_named_and_audited(tmp_path, api):
+    """Classic protection satisfied everything first, so the ruleset read as
+    unused and its bypass list went unmentioned."""
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {
+        7: {
+            "name": "protect-main",
+            "bypass_actors": [{"actor_type": "OrganizationAdmin"}],
+        }
+    }
+    report = doctor.audit(tmp_path)
+    assert errors(report.findings) == []
+    assert set(report.satisfied.values()) == {doctor.CLASSIC}
+    label = "ruleset 'protect-main' (organization acme)"
+    assert report.rulesets[label] == [
+        doctor.REVIEW,
+        doctor.CODE_OWNER,
+        doctor.APPROVALS,
+        doctor.STALE,
+        doctor.CHECK,
+    ]
+    assert any("lets 1 actor(s) bypass" in m for m in warnings(report.findings))
+
+
+def test_the_cli_lists_every_applying_ruleset(repo, run_cli, api, capsys):
+    api["rules"] = ruleset_rules()
+    api["rulesets"] = {7: {"name": "protect-main", "bypass_actors": []}}
+    assert run_cli("doctor") == 0
+    out = capsys.readouterr().out
+    assert "ruleset 'protect-main' (organization acme) requires:" in out
+    assert doctor.CHECK in out

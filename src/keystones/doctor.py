@@ -72,6 +72,8 @@ class Report:
     # Each requirement that holds, and the protection that makes it hold.
     satisfied: dict[str, str] = field(default_factory=dict)
     required_reviewers: list[RequiredReviewers] = field(default_factory=list)
+    # Every ruleset applying to the branch and what it requires, relied on or not.
+    rulesets: dict[str, list[str]] = field(default_factory=dict)
 
 
 def slug(repo_root: Path) -> tuple[str, str]:
@@ -323,6 +325,7 @@ def audit(
 
     for rule, label in rules:
         params = rule.get("parameters") or {}
+        provides = report.rulesets.setdefault(label, [])
         if rule["type"] == "required_status_checks":
             ruled = [
                 check.get("context", "")
@@ -331,14 +334,19 @@ def audit(
             contexts += ruled
             if any(required_check in context for context in ruled):
                 satisfied.setdefault(CHECK, label)
+                provides.append(CHECK)
             continue
         satisfied.setdefault(REVIEW, label)
+        provides.append(REVIEW)
         if params.get("require_code_owner_review"):
             satisfied.setdefault(CODE_OWNER, label)
+            provides.append(CODE_OWNER)
         if params.get("required_approving_review_count", 0) >= 1:
             satisfied.setdefault(APPROVALS, label)
+            provides.append(APPROVALS)
         if params.get("dismiss_stale_reviews_on_push"):
             satisfied.setdefault(STALE, label)
+            provides.append(STALE)
         report.required_reviewers += _reviewers_in(params, label)
 
     if CODE_OWNER not in satisfied and sidecar_paths:
@@ -393,14 +401,14 @@ def audit(
             )
         )
 
-    relied_on = {
-        label for _, label in rules if any(label in v for v in satisfied.values())
-    }
+    # Every applying ruleset, relied on or not: one beside classic protection
+    # still lets its bypass actors merge past the gate.
+    audited: set[str] = set()
     for rule, label in rules:
         ruleset = rulesets.get(rule.get("ruleset_id"))
-        if label not in relied_on:
+        if label in audited:
             continue
-        relied_on.discard(label)
+        audited.add(label)
         # Returned only to a token with write access to the ruleset.
         if ruleset is None or "bypass_actors" not in ruleset:
             findings.append(

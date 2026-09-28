@@ -766,6 +766,8 @@ def cmd_doctor(args, cfg: Config) -> int:
     _report(findings, args.format or _default_format())
     for requirement, source in report.satisfied.items():
         print(f"  {requirement}: {source}")
+    for label, provides in report.rulesets.items():
+        print(f"  {label} requires: {', '.join(provides) or 'nothing keystones needs'}")
     if not findings:
         print("keystones doctor: branch protection requires owner review")
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
