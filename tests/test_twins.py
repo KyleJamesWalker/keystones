@@ -191,3 +191,66 @@ def test_migrate_reports_a_twin_that_stops_matching(twinned, run_cli, capsys):
     captured = capsys.readouterr()
     out = captured.out + captured.err
     assert "twin" in out and COPY in out
+
+
+# --- adding to an existing keystone ------------------------------------------------
+
+
+def test_add_appends_a_twin_to_an_existing_keystone(repo, run_cli, capsys):
+    (repo / "reports").mkdir()
+    (repo / COPY).write_text(COPY_SRC)
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "payout-rounding",
+            "--category",
+            "finance",
+            "-m",
+            "GAAP rounding.",
+        )
+        == 0
+    )
+    assert (
+        run_cli(
+            "add",
+            "--id",
+            "finance/payout-rounding",
+            "--twin",
+            f"{COPY}::compute_payout",
+        )
+        == 0
+    )
+    sidecar = (repo / SIDECAR).read_text()
+    assert f'twins = ["{COPY}::compute_payout"]' in sidecar
+    assert "twin added" in sidecar
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_add_appends_a_dependency_to_an_existing_keystone(repo, run_cli):
+    (repo / "rates.py").write_text("BASE = 0.07\n")
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    assert run_cli("add", "--id", "p", "--depends", "rates.py::BASE") == 0
+    sidecar = (repo / "keystones" / "default" / "p.md").read_text()
+    assert 'depends = ["rates.py::BASE"]' in sidecar and "depends_hash" in sidecar
+    (repo / "rates.py").write_text("BASE = 0.09\n")
+    assert run_cli("check", "--all", "--no-base") == 1
+
+
+def test_add_still_refuses_a_plain_re_add(repo, run_cli, capsys):
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    assert run_cli("add", "--id", "p", "-m", "again") == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_add_refuses_a_twin_that_does_not_match_the_existing_hash(
+    repo, run_cli, capsys
+):
+    (repo / "reports").mkdir()
+    (repo / COPY).write_text(COPY_SRC.replace("0.01", "0.1"))
+    assert run_cli("add", f"{PAYOUT}::compute_payout", "--id", "p", "-m", "w") == 0
+    before = (repo / "keystones" / "default" / "p.md").read_text()
+    assert run_cli("add", "--id", "p", "--twin", f"{COPY}::compute_payout") == 1
+    assert "does not match" in capsys.readouterr().err
+    assert (repo / "keystones" / "default" / "p.md").read_text() == before

@@ -197,6 +197,54 @@ def cmd_check(args, cfg: Config) -> int:
     return 1 if errors else 0
 
 
+def _extend(args, cfg: Config, item, category: str, keystone_id: str, twins, depends):
+    """`add --id <existing> --twin/--depends`: append to the entry, hashed now."""
+    path = cfg.sidecar_path(category, keystone_id)
+    entry = sidecar.parse(path, category)
+    src = (cfg.repo_root / item.marker.path).read_text()
+    try:
+        semantic, _ = item.adapter.hashes(src, item.target)
+    except ResolutionError as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
+    if semantic != entry.semantic:
+        print(
+            f"keystones: '{keystone_id}' has drifted; run `keystones fix` before "
+            "adding to it",
+            file=sys.stderr,
+        )
+        return 1
+    new_twins = [t for t in twins if t not in entry.twins]
+    problem = _twins_mismatch(cfg, new_twins, item.adapter, item.marker.path, semantic)
+    if problem:
+        print(f"keystones: {problem}", file=sys.stderr)
+        return 1
+    new_depends = [d for d in depends if d not in entry.depends]
+    try:
+        depends_hash = dependencies.combined_hash(
+            cfg.repo_root, entry.depends + new_depends, cfg.max_scan_bytes
+        )
+    except dependencies.UnresolvedDependency as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
+    today = datetime.date.today().isoformat()
+    author = _git_author(cfg.repo_root)
+    if new_twins:
+        entry.twins += new_twins
+        entry.history.insert(
+            0, f"{today} - twin added: {', '.join(new_twins)}. {author}"
+        )
+    if new_depends:
+        entry.depends += new_depends
+        entry.depends_hash = depends_hash
+        entry.history.insert(
+            0, f"{today} - depends added: {', '.join(new_depends)}. {author}"
+        )
+    sidecar.write(path, entry)
+    print(f"keystones: extended '{keystone_id}' in {category}")
+    return 0
+
+
 def _twins_mismatch(
     cfg: Config, specs: list[str], adapter, rel: str, semantic: str
 ) -> str | None:
@@ -472,6 +520,9 @@ def _adopt(args, cfg: Config) -> int:
             f"keystones: warning: elsewhere, {finding.format_plain()}", file=sys.stderr
         )
     if cfg.sidecar_path(category, keystone_id).exists():
+        additions = list(getattr(args, "twins", None) or []), list(args.depends or [])
+        if any(additions):
+            return _extend(args, cfg, item, category, keystone_id, *additions)
         print(
             f"keystones: '{keystone_id}' already exists in {category}",
             file=sys.stderr,
@@ -679,7 +730,8 @@ def _file_scope_insert_line(src: str) -> int:
 def cmd_add(args, cfg: Config) -> int:
     if args.target is None and args.id is None:
         return _complete_pending(args, cfg)
-    if args.id is None or args.message is None:
+    extending = args.target is None and (args.twins or args.depends)
+    if args.id is None or (args.message is None and not extending):
         print("keystones: add needs --id and -m", file=sys.stderr)
         return 2
     if args.target is None:
