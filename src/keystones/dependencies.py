@@ -25,7 +25,7 @@ class UnresolvedDependency(Exception):
         self.reason = reason
 
 
-def _render_one(repo_root: Path, spec: str) -> str:
+def _render_one(repo_root: Path, spec: str, cap: int | None = None) -> str:
     if "::" not in spec:
         raise UnresolvedDependency(spec, "expected path/to/file.py::Symbol")
     rel, symbol = spec.split("::", 1)
@@ -33,6 +33,10 @@ def _render_one(repo_root: Path, spec: str) -> str:
     path = repo_root / rel
     if not path.is_file():
         raise UnresolvedDependency(spec, f"{rel} does not exist")
+    if cap is not None and path.stat().st_size > cap:
+        raise UnresolvedDependency(
+            spec, f"{rel} is over max_scan_bytes ({cap}), so it is never read"
+        )
     if adapters.needs_extra(rel):
         raise UnresolvedDependency(
             spec,
@@ -47,23 +51,25 @@ def _render_one(repo_root: Path, spec: str) -> str:
     return rendered
 
 
-def combined_hash(repo_root: Path, specs: list[str]) -> str:
+def combined_hash(repo_root: Path, specs: list[str], cap: int | None = None) -> str:
     """Order-independent, so reordering the list is not a change."""
     if not specs:
         return EMPTY
-    parts = [f"{spec}={_render_one(repo_root, spec)}" for spec in sorted(set(specs))]
+    parts = [
+        f"{spec}={_render_one(repo_root, spec, cap)}" for spec in sorted(set(specs))
+    ]
     payload = "\n".join(parts)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def check(repo_root: Path, entries) -> list[Finding]:
+def check(repo_root: Path, entries, cap: int | None = None) -> list[Finding]:
     """C11. A declared dependency changing is an owner-review event."""
     findings: list[Finding] = []
     for entry in sorted(entries, key=lambda e: e.id):
         if not entry.depends:
             continue
         try:
-            actual = combined_hash(repo_root, entry.depends)
+            actual = combined_hash(repo_root, entry.depends, cap)
         except UnresolvedDependency as exc:
             findings.append(
                 Finding(

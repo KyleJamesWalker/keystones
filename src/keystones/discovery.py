@@ -53,6 +53,21 @@ def _readable(path: Path, cap: int = MAX_SCAN_BYTES) -> str | None:
         return None
 
 
+def unread(cfg: Config) -> list[str]:
+    """Tracked files over the cap, which a scan never opens."""
+    out = []
+    for rel in _tracked_files(cfg.repo_root):
+        if cfg.is_excluded(rel):
+            continue
+        full = cfg.repo_root / rel
+        try:
+            if full.is_file() and full.stat().st_size > cfg.max_scan_bytes:
+                out.append(rel)
+        except OSError:
+            continue
+    return sorted(out)
+
+
 def source_files(cfg: Config, paths: list[str] | None = None) -> list[str]:
     """Every file type is in scope now that a fallback adapter exists.
 

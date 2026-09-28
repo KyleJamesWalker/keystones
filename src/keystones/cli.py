@@ -17,6 +17,7 @@ from keystones.adapters.base import ResolutionError
 from keystones.checks import disablers, oversized, run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect, scan
+from keystones.discovery import unread as discovery_unread
 from keystones.models import Entry, Finding, Marker, Scope, Severity
 
 
@@ -282,7 +283,9 @@ def cmd_fix(args, cfg: Config) -> int:
             )
             return 1
         try:
-            depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+            depends_hash = dependencies.combined_hash(
+                cfg.repo_root, entry.depends, cfg.max_scan_bytes
+            )
         except dependencies.UnresolvedDependency as exc:
             print(f"keystones: {entry.id}: {exc}", file=sys.stderr)
             return 1
@@ -343,7 +346,9 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.hash = adapters.kind_for(item.adapter, item.target)
         entry.hasher = adapters.hasher_id(item.adapter, item.target)
         entry.source = source
-        entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        entry.depends_hash = dependencies.combined_hash(
+            cfg.repo_root, entry.depends, cfg.max_scan_bytes
+        )
         entry.disabled_by = disabled_by
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
         changed.append(entry.id)
@@ -424,6 +429,13 @@ def _adopt(args, cfg: Config) -> int:
         return 1
     if not match:
         _report(findings, "plain", cfg.repo_root)
+        unread = discovery_unread(cfg)
+        if unread:
+            print(
+                f"keystones: not read, over max_scan_bytes ({cfg.max_scan_bytes}): "
+                + ", ".join(unread),
+                file=sys.stderr,
+            )
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
             "write one, or check the id.",
@@ -474,7 +486,9 @@ def _adopt(args, cfg: Config) -> int:
         return 1
     depends = list(args.depends or [])
     try:
-        depends_hash = dependencies.combined_hash(cfg.repo_root, depends)
+        depends_hash = dependencies.combined_hash(
+            cfg.repo_root, depends, cfg.max_scan_bytes
+        )
     except dependencies.UnresolvedDependency as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
@@ -761,7 +775,9 @@ def cmd_add(args, cfg: Config) -> int:
         # Resolved before the file is touched: an unresolvable spec used to
         # leave a marker in the source with no sidecar behind it.
         depends = list(args.depends or [])
-        depends_hash = dependencies.combined_hash(cfg.repo_root, depends)
+        depends_hash = dependencies.combined_hash(
+            cfg.repo_root, depends, cfg.max_scan_bytes
+        )
     except dependencies.UnresolvedDependency as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1

@@ -113,7 +113,9 @@ def apply(
         entry.text = text
         entry.target = str(item.target)
         entry.source = item.adapter.canonical_source(live, item.target)
-        entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        entry.depends_hash = dependencies.combined_hash(
+            cfg.repo_root, entry.depends, cfg.max_scan_bytes
+        )
         sidecar.write(Path(entry.path), entry)
         migrated.append(entry)
     return migrated

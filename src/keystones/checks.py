@@ -419,30 +419,32 @@ def oversized(cfg: Config, entry_list: list[Entry]) -> tuple[list[Finding], set[
     A keystoned target must never pass because nobody read it.
     """
     findings: list[Finding] = []
-    paths: set[str] = set()
+    by_path: dict[str, list[Entry]] = {}
     for entry in sorted(entry_list, key=lambda e: (e.category, e.id)):
         rel = entry.target.split("::")[0].split("#")[0]
-        if rel in paths:
-            continue
-        full = cfg.repo_root / rel
+        by_path.setdefault(rel, []).append(entry)
+    paths: set[str] = set()
+    for rel, entries in sorted(by_path.items()):
         try:
-            size = full.stat().st_size
+            size = (cfg.repo_root / rel).stat().st_size
         except OSError:
             continue
-        if size > cfg.max_scan_bytes:
-            paths.add(rel)
-            findings.append(
-                Finding(
-                    "size",
-                    Severity.ERROR,
-                    f"{rel} is {size} bytes, over max_scan_bytes "
-                    f"({cfg.max_scan_bytes}), so keystone '{entry.id}' in it was "
-                    "not checked. Raise [tool.keystones] max_scan_bytes, or move "
-                    "the keystone to a smaller file.",
-                    rel,
-                    owner_hint=entry.category,
-                )
+        if size <= cfg.max_scan_bytes:
+            continue
+        paths.add(rel)
+        names = ", ".join(f"'{e.id}'" for e in entries)
+        findings.append(
+            Finding(
+                "size",
+                Severity.ERROR,
+                f"{rel} is {size} bytes, over max_scan_bytes "
+                f"({cfg.max_scan_bytes}), so keystone(s) {names} in it were not "
+                "checked. Raise [tool.keystones] max_scan_bytes, or move them to "
+                "a smaller file.",
+                rel,
+                owner_hint=entries[0].category,
             )
+        )
     return findings, paths
 
 
@@ -762,7 +764,7 @@ def c17_twins(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
 def c11_dependencies(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
     from keystones import dependencies
 
-    return dependencies.check(cfg.repo_root, entry_list)
+    return dependencies.check(cfg.repo_root, entry_list, cfg.max_scan_bytes)
 
 
 def stale_report(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
