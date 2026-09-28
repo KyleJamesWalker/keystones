@@ -10,24 +10,27 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from keystones import adapters, gitref
-from keystones.config import DEFAULT_EXCLUDE_DIRS, Config
+from keystones.config import Config, default_excluded
 from keystones.models import Finding, Severity
+
+# (category, id), as in `<root>/<category>/<id>.md`.
+Key = tuple[str, str]
 
 
 @dataclass
 class Inventory:
-    markers: dict[str, str] = field(default_factory=dict)
-    marker_paths: dict[str, str] = field(default_factory=dict)
-    entries: dict[str, str] = field(default_factory=dict)
+    markers: set[Key] = field(default_factory=set)
+    marker_paths: dict[Key, str] = field(default_factory=dict)
+    entries: set[Key] = field(default_factory=set)
     categories: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    include: tuple[str, ...] = ()
 
     def excludes(self, rel_path: str) -> bool:
-        parts = PurePosixPath(rel_path).parts
-        if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        if default_excluded(rel_path, self.include):
             return True
         return any(
             fnmatch(rel_path, pat)
@@ -38,30 +41,35 @@ class Inventory:
 
 def _config_at(
     repo_root: Path, ref: str
-) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     raw = gitref.read_at(repo_root, ref, "pyproject.toml")
     if raw is None:
-        return "keystones", ("default",), ()
+        return "keystones", ("default",), (), ()
     try:
         data = tomllib.loads(raw).get("tool", {}).get("keystones", {})
     except tomllib.TOMLDecodeError:
-        return "keystones", ("default",), ()
+        return "keystones", ("default",), (), ()
     categories = tuple(data.get("categories", ["default"]))
     if "default" not in categories:
         categories = ("default", *categories)
-    return data.get("root", "keystones"), categories, tuple(data.get("exclude", []))
+    return (
+        data.get("root", "keystones"),
+        categories,
+        tuple(data.get("exclude", [])),
+        tuple(data.get("include", [])),
+    )
 
 
 def inventory_at(repo_root: Path, ref: str) -> Inventory:
-    root, categories, exclude = _config_at(repo_root, ref)
-    inv = Inventory(categories=categories, exclude=exclude)
+    root, categories, exclude, include = _config_at(repo_root, ref)
+    inv = Inventory(categories=categories, exclude=exclude, include=include)
     supported = adapters.supported_extensions()
 
     for rel in gitref.files_at(repo_root, ref):
         if rel.startswith(f"{root}/") and rel.endswith(".md"):
             parts = Path(rel).parts
             if len(parts) == 3 and parts[2] != "INDEX.md":
-                inv.entries[Path(rel).stem] = parts[1]
+                inv.entries.add((parts[1], Path(rel).stem))
             continue
         if not rel.endswith(supported) or inv.excludes(rel):
             continue
@@ -76,18 +84,19 @@ def inventory_at(repo_root: Path, ref: str) -> Inventory:
             # tells us nothing and must not fail the current check.
             continue
         for marker in found:
-            inv.markers[marker.id] = marker.category
-            inv.marker_paths[marker.id] = rel
+            inv.markers.add(marker.key)
+            inv.marker_paths[marker.key] = rel
     return inv
 
 
 def inventory_head(cfg: Config, resolved, entry_list) -> Inventory:
     return Inventory(
-        markers={item.marker.id: item.marker.category for item in resolved},
-        marker_paths={item.marker.id: item.marker.path for item in resolved},
-        entries={entry.id: entry.category for entry in entry_list},
+        markers={item.marker.key for item in resolved},
+        marker_paths={item.marker.key: item.marker.path for item in resolved},
+        entries={entry.key for entry in entry_list},
         categories=cfg.categories,
         exclude=cfg.exclude,
+        include=cfg.include,
     )
 
 
@@ -95,16 +104,17 @@ def c9_removals(base: Inventory, head: Inventory) -> list[Finding]:
     """Every removal names the category losing coverage, so CODEOWNERS applies."""
     findings: list[Finding] = []
 
-    for keystone_id, category in sorted(base.markers.items()):
-        if keystone_id in head.markers:
+    for key in sorted(base.markers):
+        category, keystone_id = key
+        if key in head.markers:
             continue
-        path = base.marker_paths.get(keystone_id, "")
+        path = base.marker_paths.get(key, "")
         if head.excludes(path):
             reason = (
                 f"its file {path} is now covered by an exclude pattern, which removes "
                 "the keystone without touching it"
             )
-        elif keystone_id in head.entries:
+        elif key in head.entries:
             reason = f"the marker was deleted from {path} but the sidecar entry remains"
         else:
             reason = f"the marker in {path} and its sidecar entry were both deleted"
@@ -119,8 +129,9 @@ def c9_removals(base: Inventory, head: Inventory) -> list[Finding]:
             )
         )
 
-    for keystone_id, category in sorted(base.entries.items()):
-        if keystone_id in head.entries or keystone_id in base.markers:
+    for key in sorted(base.entries):
+        category, keystone_id = key
+        if key in head.entries or key in base.markers:
             continue
         findings.append(
             Finding(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from keystones.adapters import fallback
+from keystones.adapters import fallback, structured
 from keystones.adapters import python as python_adapter
 
 
@@ -74,6 +74,9 @@ def kinds_for(path: str, exclude: str | None = None) -> tuple[str, ...]:
     """
     parsed = for_path(path, allow_fallback=False)
     kinds = [TEXT_KIND] if parsed is None else [parsed.kind_for_path(path), TEXT_KIND]
+    # Opt-in, so it is offered after text rather than taking the extension.
+    if path.endswith(structured.extensions) and structured.available():
+        kinds.append(structured.KIND)
     chosen = default_kind(path)
     if chosen in kinds:
         kinds.remove(chosen)
@@ -87,6 +90,12 @@ def for_kind(path: str, kind: str):
     parsed = for_path(path, allow_fallback=False)
     if parsed is not None and parsed.kind_for_path(path) == kind:
         return parsed
+    if kind == structured.KIND and path.endswith(structured.extensions):
+        if structured.available():
+            return structured
+        raise UnknownKind(
+            f"{path}: hash=yaml needs the extra: pip install 'keystones[yaml]'"
+        )
     raise UnknownKind(
         f"{path}: no '{kind}' basis here. Available: {', '.join(kinds_for(path))}"
     )
@@ -116,6 +125,33 @@ def for_path(path: str, allow_fallback: bool = True):
         if suffix in adapter.extensions:
             return adapter
     return fallback if allow_fallback else None
+
+
+def for_symbols(path: str):
+    """The adapter that can name symbols in this file, for `depends` and twins.
+
+    The text adapter names nothing, so a structured basis is preferred to it.
+    """
+    parsed = for_path(path, allow_fallback=False)
+    if parsed is not None:
+        return parsed
+    if path.endswith(structured.extensions) and structured.available():
+        return structured
+    return fallback
+
+
+def hasher_id(adapter, target) -> str:
+    """The hasher an entry records. A region is text whatever its file's parser.
+
+    `target` is a Target or the string an entry stores; `#L` marks a region.
+    """
+    if isinstance(target, str):
+        region, path = "#L" in target, target.split("::")[0].split("#")[0]
+    else:
+        region, path = target.region, target.path
+    if region:
+        return fallback.HASHER_ID
+    return adapter.hasher_id_for_path(path)
 
 
 def needs_extra(path: str) -> bool:

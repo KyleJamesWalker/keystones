@@ -86,7 +86,7 @@ def test_bad_answers_are_asked_again(repo, run_cli, answers, capsys):
 def test_an_id_already_in_use_is_refused(repo, run_cli, answers, capsys):
     mark(repo)
     (repo / "notes.yaml").write_text("# keystone(file): taken\na: 1\n")
-    answers("taken", "fresh", "default", "why", "", "")
+    answers("taken", "default", "fresh", "why", "", "")
     assert run_cli("add", "--id", "taken", "-m", "x") == 0
     assert run_cli("add") == 0
     assert "'taken' is already a keystone" in capsys.readouterr().err

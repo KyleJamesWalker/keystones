@@ -12,10 +12,10 @@ from pathlib import Path
 from keystones import adapters, dependencies, gitref, sidecar
 from keystones import markers as marker_grammar
 from keystones.adapters.base import ResolutionError
-from keystones.checks import run_all
+from keystones.checks import disablers, run_all
 from keystones.config import Config, ConfigError, load
 from keystones.discovery import collect, scan
-from keystones.models import Entry, Marker, Scope, Severity
+from keystones.models import Entry, Finding, Marker, Scope, Severity
 
 
 def _git_author(repo_root: Path) -> str:
@@ -53,11 +53,74 @@ def _entries(cfg: Config) -> list[Entry]:
     return sidecar.load_all(cfg.sidecar_root, cfg.categories)
 
 
+def _staged_entries(
+    cfg: Config, paths: list[str]
+) -> tuple[dict[tuple[str, str], Entry], list[Finding]]:
+    """The sidecars among `paths`, parsed, so each is checked with its marker."""
+    entries: dict[tuple[str, str], Entry] = {}
+    findings: list[Finding] = []
+    prefix = f"{cfg.root.strip('/')}/"
+    for rel in paths:
+        if not rel.startswith(prefix) or not rel.endswith(".md"):
+            continue
+        parts = rel[len(prefix) :].split("/")
+        full = cfg.repo_root / rel
+        if len(parts) != 2 or parts[0] not in cfg.categories or not full.is_file():
+            continue
+        try:
+            entry = sidecar.parse(full, parts[0])
+        except (sidecar.SidecarError, ValueError) as exc:
+            findings.append(Finding("sidecar", Severity.ERROR, str(exc), rel))
+            continue
+        entries[entry.key] = entry
+    return entries, findings
+
+
+def _check_paths(args, cfg: Config, paths: list[str]) -> int:
+    """The staged hook: cost follows the files passed, not the size of the repo."""
+    from keystones.checks import c2_orphan_entries, c5_stored_source
+
+    staged, findings = _staged_entries(cfg, paths)
+    targets = {entry.target.split("::")[0].split("#")[0] for entry in staged.values()}
+    resolved, found, skipped = collect(cfg, sorted({*paths, *targets}))
+    findings += found
+
+    entries = dict(staged)
+    for item in resolved:
+        # Every category, so a marker naming the wrong one still meets its entry.
+        for category in cfg.categories:
+            key = (category, item.marker.id)
+            path = cfg.sidecar_path(*key)
+            if key in entries or not path.is_file():
+                continue
+            try:
+                entries[key] = sidecar.parse(path, category)
+            except (sidecar.SidecarError, ValueError) as exc:
+                rel = str(path.relative_to(cfg.repo_root))
+                findings.append(Finding("sidecar", Severity.ERROR, str(exc), rel))
+    findings += run_all(
+        cfg,
+        resolved,
+        list(entries.values()),
+        scoped=True,
+        warn_only=args.warn_only,
+    )
+    findings += c5_stored_source(staged)
+    findings += c2_orphan_entries(resolved, staged, skipped)
+    if not resolved and not staged and not findings:
+        return 0
+    _report(findings, args.format or _default_format())
+    if all(f.severity is Severity.NOTICE for f in findings):
+        print(f"keystones: {len(resolved)} keystone(s) verified")
+    return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
+
+
 def cmd_check(args, cfg: Config) -> int:
     paths = None if args.all else (args.paths or None)
-    scoped = paths is not None
+    if paths is not None:
+        return _check_paths(args, cfg, paths)
     base = None
-    if not scoped and not args.no_base:
+    if not args.no_base:
         base = gitref.resolve_base(cfg.repo_root, args.base)
         if base is None:
             print(
@@ -65,21 +128,63 @@ def cmd_check(args, cfg: Config) -> int:
                 "Pass --base <ref>, or --no-base to silence this.",
                 file=sys.stderr,
             )
-    resolved, findings, skipped = collect(cfg, paths)
+    resolved, findings, skipped = collect(cfg, None)
     findings = findings + run_all(
         cfg,
         resolved,
         _entries(cfg),
-        scoped=scoped,
         warn_only=args.warn_only,
         base=base,
         skipped=skipped,
     )
     _report(findings, args.format or _default_format())
     errors = [f for f in findings if f.severity is Severity.ERROR]
-    if not findings:
+    if all(f.severity is Severity.NOTICE for f in findings):
         print(f"keystones: {len(resolved)} keystone(s) verified")
     return 1 if errors else 0
+
+
+def _twins_mismatch(
+    cfg: Config, specs: list[str], adapter, rel: str, semantic: str
+) -> str | None:
+    """Why these twins cannot be recorded against this hash, or None."""
+    from keystones import twins
+
+    kind = adapter.kind_for_path(rel)
+    for spec in specs:
+        try:
+            actual, _ = twins.semantic(cfg.repo_root, spec, kind)
+        except twins.UnresolvedTwin as exc:
+            return f"twin {exc}"
+        if actual != semantic:
+            return (
+                f"twin {spec} does not match the keystone: the two hash "
+                "differently, so one of them is not a copy of the other"
+            )
+    return None
+
+
+class AmbiguousId(Exception):
+    """A bare id that exists in more than one category."""
+
+
+def _keys_named(values: list[str], keys) -> set[tuple[str, str]]:
+    """`--id` values as (category, id) keys; `category/id` names one exactly."""
+    out: set[tuple[str, str]] = set()
+    for value in values:
+        category, sep, keystone_id = value.rpartition("/")
+        if sep:
+            out.add((category, keystone_id))
+            continue
+        matches = sorted({key for key in keys if key[1] == value})
+        if len(matches) > 1:
+            raise AmbiguousId(
+                f"id '{value}' exists in categories "
+                f"{', '.join(c for c, _ in matches)}; say which with "
+                f"--id {matches[0][0]}/{value}"
+            )
+        out.update(matches)
+    return out
 
 
 def cmd_fix(args, cfg: Config) -> int:
@@ -88,15 +193,20 @@ def cmd_fix(args, cfg: Config) -> int:
         _report(findings, "plain")
         return 1
 
-    entries = {entry.id: entry for entry in _entries(cfg)}
+    entries = {entry.key: entry for entry in _entries(cfg)}
+    try:
+        selected = _keys_named(args.id, entries) if args.id else None
+    except AmbiguousId as exc:
+        print(f"keystones: {exc}", file=sys.stderr)
+        return 1
     author = _git_author(cfg.repo_root)
     today = datetime.date.today().isoformat()
     changed: list[str] = []
     failed = False
 
     for item in resolved:
-        entry = entries.get(item.marker.id)
-        if entry is None or (args.id and entry.id not in args.id):
+        entry = entries.get(item.marker.key)
+        if entry is None or (selected is not None and entry.key not in selected):
             continue
         src = (cfg.repo_root / item.marker.path).read_text()
         try:
@@ -106,7 +216,7 @@ def cmd_fix(args, cfg: Config) -> int:
             failed = True
             continue
         target_str = str(item.target)
-        current_hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        current_hasher = adapters.hasher_id(item.adapter, item.target)
         if entry.hasher and entry.hasher != current_hasher:
             # Writing here would store a hash the rest of the repo cannot
             # reproduce, and the next check would ask for another fix forever.
@@ -127,7 +237,12 @@ def cmd_fix(args, cfg: Config) -> int:
         # An entry with no dependencies stores no depends_hash, so the absent
         # value has to compare equal to the empty one or every move looks semantic.
         stored_depends = entry.depends_hash or dependencies.EMPTY
-        semantic_changed = semantic != entry.semantic or depends_hash != stored_depends
+        disabled_by = disablers(cfg, item.adapter, src, item.target)
+        semantic_changed = (
+            semantic != entry.semantic
+            or depends_hash != stored_depends
+            or disabled_by != sorted(entry.disabled_by)
+        )
         if not semantic_changed and text == entry.text and target_str == entry.target:
             continue
         if semantic_changed and not args.message:
@@ -156,9 +271,10 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.semantic = semantic
         entry.text = text
         entry.hash = item.adapter.kind_for_path(item.marker.path)
-        entry.hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        entry.hasher = adapters.hasher_id(item.adapter, item.target)
         entry.source = item.adapter.canonical_source(src, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
+        entry.disabled_by = disabled_by
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
         changed.append(entry.id)
 
@@ -221,7 +337,13 @@ def _adopt(args, cfg: Config) -> int:
         _report(findings, "plain")
         return 1
 
-    match = [item for item in resolved if item.marker.id == args.id]
+    wanted_category, _, keystone_id = args.id.rpartition("/")
+    match = [
+        item
+        for item in resolved
+        if item.marker.id == keystone_id
+        and wanted_category in ("", item.marker.category)
+    ]
     if not match:
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
@@ -229,18 +351,39 @@ def _adopt(args, cfg: Config) -> int:
             file=sys.stderr,
         )
         return 1
+    categories = sorted({m.marker.category for m in match})
+    if len(categories) > 1:
+        print(
+            f"keystones: id '{keystone_id}' is marked in categories "
+            f"{', '.join(categories)}; say which with "
+            f"--id {categories[0]}/{keystone_id}",
+            file=sys.stderr,
+        )
+        return 1
     if len(match) > 1:
         where = ", ".join(f"{m.marker.path}:{m.marker.lineno}" for m in match)
         print(
-            f"keystones: id '{args.id}' appears more than once: {where}",
+            f"keystones: id '{keystone_id}' appears more than once: {where}",
             file=sys.stderr,
         )
         return 1
 
     item = match[0]
     category = item.marker.category
-    if cfg.sidecar_path(category, args.id).exists():
-        print(f"keystones: '{args.id}' already exists in {category}", file=sys.stderr)
+    pattern = cfg.unreviewed_by(item.marker.path)
+    if pattern is not None:
+        print(
+            f"keystones: [C18] {item.marker.path} matches '{pattern}' in "
+            "[tool.keystones] unreviewed, so it is rewritten without review and "
+            "no gate can hold there.",
+            file=sys.stderr,
+        )
+        return 1
+    if cfg.sidecar_path(category, keystone_id).exists():
+        print(
+            f"keystones: '{keystone_id}' already exists in {category}",
+            file=sys.stderr,
+        )
         return 1
 
     src = (cfg.repo_root / item.marker.path).read_text()
@@ -255,17 +398,24 @@ def _adopt(args, cfg: Config) -> int:
     except dependencies.UnresolvedDependency as exc:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
+    twin_specs = list(getattr(args, "twins", None) or [])
+    problem = _twins_mismatch(cfg, twin_specs, item.adapter, item.marker.path, semantic)
+    if problem:
+        print(f"keystones: {problem}", file=sys.stderr)
+        return 1
     entry = Entry(
-        id=args.id,
+        id=keystone_id,
         category=category,
         target=str(item.target),
         hash=item.adapter.kind_for_path(item.marker.path),
-        hasher=item.adapter.hasher_id_for_path(item.marker.path),
+        hasher=adapters.hasher_id(item.adapter, item.target),
         semantic=semantic,
         text=text_digest,
         review_every=args.review_every,
         depends=depends,
         depends_hash=depends_hash,
+        twins=twin_specs,
+        disabled_by=disablers(cfg, item.adapter, src, item.target),
         why=args.message,
         source=item.adapter.canonical_source(src, item.target),
         source_lang=_lang_for(item.marker.path),
@@ -274,9 +424,9 @@ def _adopt(args, cfg: Config) -> int:
             f"{_git_author(cfg.repo_root)}"
         ],
     )
-    sidecar.write(cfg.sidecar_path(category, args.id), entry)
+    sidecar.write(cfg.sidecar_path(category, keystone_id), entry)
     _write_index(cfg)
-    print(f"keystones: adopted '{args.id}' on {item.target}")
+    print(f"keystones: adopted '{keystone_id}' on {item.target}")
     return 0
 
 
@@ -307,12 +457,12 @@ def _complete_pending(args, cfg: Config) -> int:
         )
         return 1
 
-    taken = {item.marker.id for item in resolved} | {e.id for e in _entries(cfg)}
+    taken = {item.marker.key for item in resolved} | {e.key for e in _entries(cfg)}
 
     def check_id(value: str) -> str | None:
         if not marker_grammar.ID_RE.match(value):
             return "use letters, digits, dot, dash or underscore"
-        return f"'{value}' is already a keystone" if value in taken else None
+        return None
 
     def check_category(value: str) -> str | None:
         return None if value in cfg.categories else f"unknown category '{value}'"
@@ -356,6 +506,13 @@ def _complete_pending(args, cfg: Config) -> int:
                 if len(cfg.categories) > 1
                 else "default"
             )
+            # Ids are unique per category, so this can only be told once both are in.
+            while (category, marker_id) in taken:
+                print(
+                    f"  '{marker_id}' is already a keystone in {category}",
+                    file=sys.stderr,
+                )
+                marker_id = _ask("id", check_id)
             message = _ask("why is it load-bearing", check_reason)
             review_every = _ask(
                 "review every, e.g. 180d (blank for none)", check_duration
@@ -374,7 +531,7 @@ def _complete_pending(args, cfg: Config) -> int:
         path.write_bytes("".join(lines).encode("utf-8"))
         status = _adopt(
             argparse.Namespace(
-                id=marker_id,
+                id=f"{category}/{marker_id}",
                 message=message,
                 review_every=review_every or None,
                 depends=depends.replace(",", " ").split(),
@@ -385,7 +542,7 @@ def _complete_pending(args, cfg: Config) -> int:
             # Leave no marker behind without a sidecar to go with it.
             path.write_bytes(original)
             return status
-        taken.add(marker_id)
+        taken.add((category, marker_id))
     return 0
 
 
@@ -431,6 +588,15 @@ def cmd_add(args, cfg: Config) -> int:
     if not path.is_file():
         print(f"keystones: no such file {rel}", file=sys.stderr)
         return 1
+    pattern = cfg.unreviewed_by(rel)
+    if pattern is not None:
+        print(
+            f"keystones: [C18] {rel} matches '{pattern}' in [tool.keystones] "
+            "unreviewed, so it is rewritten without review and no gate can hold "
+            "there.",
+            file=sys.stderr,
+        )
+        return 1
     adapter = adapters.for_path(rel)
     if adapter is None:
         print(f"keystones: no adapter for {rel}", file=sys.stderr)
@@ -471,8 +637,11 @@ def cmd_add(args, cfg: Config) -> int:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
 
-    leader = adapter.comment_prefix(rel)
-    quals = [] if args.category == "default" else [args.category]
+    # The file's language decides the comment syntax, not the chosen basis.
+    leader = adapters.for_path(rel).comment_prefix(rel)
+    quals = ["file"] if scope is Scope.FILE else []
+    if args.category != "default":
+        quals.append(args.category)
     if getattr(args, "hash_kind", None):
         quals.append(f"hash={args.hash_kind}")
     keyword = f"keystone({', '.join(quals)})" if quals else "keystone"
@@ -486,6 +655,21 @@ def cmd_add(args, cfg: Config) -> int:
         if qualname
         else adapter.resolve(new_src, Marker(args.id, args.category, scope, rel, 1))
     )
+    if qualname:
+        marker = Marker(args.id, args.category, scope, rel, insert_at)
+        try:
+            lands_on = adapter.resolve(new_src, marker).qualname
+        except ResolutionError:
+            lands_on = None
+        if lands_on != qualname:
+            path.write_text(src)
+            print(
+                f"keystones: a marker above {qualname} would attach to "
+                f"{lands_on or 'nothing'}, which shares its first line. Move "
+                f"{qualname} onto its own line first.",
+                file=sys.stderr,
+            )
+            return 1
     try:
         semantic, text = adapter.hashes(new_src, new_target)
     except ResolutionError as exc:
@@ -493,17 +677,25 @@ def cmd_add(args, cfg: Config) -> int:
         path.write_text(src)
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
+    twin_specs = list(args.twins or [])
+    problem = _twins_mismatch(cfg, twin_specs, adapter, rel, semantic)
+    if problem:
+        path.write_text(src)
+        print(f"keystones: {problem}", file=sys.stderr)
+        return 1
     entry = Entry(
         id=args.id,
         category=args.category,
         target=str(new_target),
         hash=adapter.kind_for_path(rel),
-        hasher=adapter.hasher_id_for_path(rel),
+        hasher=adapters.hasher_id(adapter, new_target),
         semantic=semantic,
         text=text,
         review_every=args.review_every,
         depends=depends,
         depends_hash=depends_hash,
+        twins=twin_specs,
+        disabled_by=disablers(cfg, adapter, new_src, new_target),
         why=args.message,
         source=adapter.canonical_source(new_src, new_target),
         source_lang=_lang_for(rel),
@@ -522,11 +714,19 @@ def cmd_doctor(args, cfg: Config) -> int:
     from keystones import doctor
 
     try:
-        findings = doctor.run(cfg.repo_root, args.required_check)
+        sidecar_paths = (
+            [f"{cfg.root}/{category}/_probe.md" for category in cfg.categories]
+            if cfg.codeowners_from_rulesets
+            else None
+        )
+        report = doctor.audit(cfg.repo_root, args.required_check, sidecar_paths)
     except doctor.Unavailable as exc:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0
+    findings = report.findings
     _report(findings, args.format or _default_format())
+    for requirement, source in report.satisfied.items():
+        print(f"  {requirement}: {source}")
     if not findings:
         print("keystones doctor: branch protection requires owner review")
     return 1 if any(f.severity is Severity.ERROR for f in findings) else 0
@@ -669,6 +869,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="hash_kind",
         help="basis to gate on: 'text', or a grammar name. Auto when the file "
         "has exactly one readable basis.",
+    )
+    add.add_argument(
+        "--twin",
+        dest="twins",
+        action="append",
+        help="a same-repo copy that must keep hashing like this keystone, "
+        "path.py::Symbol or path for a whole file; repeatable",
     )
     add.add_argument("-m", "--message", help="why this is load-bearing")
     add.add_argument("--review-every", help="staleness budget, e.g. 180d")

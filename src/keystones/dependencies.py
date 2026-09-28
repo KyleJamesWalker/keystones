@@ -12,6 +12,7 @@ import hashlib
 from pathlib import Path
 
 from keystones import adapters
+from keystones.adapters.base import ResolutionError
 from keystones.models import Finding, Severity
 
 EMPTY = "sha256:" + hashlib.sha256(b"").hexdigest()
@@ -28,15 +29,18 @@ def _render_one(repo_root: Path, spec: str) -> str:
     if "::" not in spec:
         raise UnresolvedDependency(spec, "expected path/to/file.py::Symbol")
     rel, symbol = spec.split("::", 1)
-    adapter = adapters.for_path(rel)
-    if adapter is None:
-        raise UnresolvedDependency(spec, f"no adapter handles {rel}")
+    adapter = adapters.for_symbols(rel)
     path = repo_root / rel
     if not path.is_file():
         raise UnresolvedDependency(spec, f"{rel} does not exist")
+    if adapters.needs_extra(rel):
+        raise UnresolvedDependency(
+            spec,
+            f"{rel} needs a parser that is not installed: pip install 'keystones[all]'",
+        )
     try:
-        rendered = adapter.render_symbol(path.read_text(), symbol)
-    except SyntaxError as exc:
+        rendered = adapter.render_symbol(path.read_text(), symbol, path=rel)
+    except (SyntaxError, ResolutionError) as exc:
         raise UnresolvedDependency(spec, f"{rel} does not parse: {exc}") from exc
     if rendered is None:
         raise UnresolvedDependency(spec, f"{symbol} not found in {rel}")

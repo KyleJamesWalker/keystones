@@ -1,0 +1,139 @@
+"""C16: a keystoned test switched off from outside its own hash."""
+
+import pytest
+
+GUARD = """import pytest
+
+
+class TestRounding:
+    # keystone: guard
+    def test_guard(self):
+        assert 1
+"""
+
+SIDECAR = "keystones/default/guard.md"
+
+
+@pytest.fixture
+def guarded(repo, run_cli):
+    (repo / "test_rounding.py").write_text(GUARD)
+    assert run_cli("add", "--id", "guard", "-m", "Guards rounding.") == 0
+    return repo
+
+
+def edit(repo, old, new):
+    path = repo / "test_rounding.py"
+    path.write_text(path.read_text().replace(old, new, 1))
+
+
+def check(run_cli, capsys, *args):
+    capsys.readouterr()
+    status = run_cli("check", *(args or ("--all", "--no-base")))
+    return status, capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "named"),
+    [
+        (
+            "class TestRounding:",
+            "@pytest.mark.skip(reason='flaky')\nclass TestRounding:",
+            "pytest.mark.skip on class TestRounding",
+        ),
+        (
+            "class TestRounding:\n",
+            "class TestRounding:\n    pytestmark = pytest.mark.xfail\n\n",
+            "pytest.mark.xfail on class TestRounding pytestmark",
+        ),
+        (
+            "import pytest\n",
+            "import pytest\n\n"
+            "pytestmark = [pytest.mark.slow, pytest.mark.skipif(True, reason='x')]\n",
+            "pytest.mark.skipif on module pytestmark",
+        ),
+        (
+            "import pytest\n",
+            "import pytest\nimport unittest as ut\n",
+            None,
+        ),
+    ],
+    ids=["class-decorator", "class-pytestmark", "module-pytestmark", "no-disabler"],
+)
+def test_a_skip_from_outside_the_function_is_c16(
+    guarded, run_cli, capsys, old, new, named
+):
+    edit(guarded, old, new)
+    status, err = check(run_cli, capsys)
+    if named is None:
+        assert status == 0, err
+        return
+    assert status == 1
+    assert f"[C16] keystone 'guard' is switched off by {named}" in err
+    assert "[C3]" not in err, "no byte of the function moved"
+
+
+def test_an_aliased_unittest_skip_is_recognised(guarded, run_cli, capsys):
+    edit(guarded, "import pytest\n", "import pytest\nimport unittest as ut\n")
+    edit(guarded, "class TestRounding:", "@ut.skip('later')\nclass TestRounding:")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "unittest.skip on class TestRounding" in err
+
+
+def test_a_non_pytest_disabler_counts_once_configured(guarded, run_cli, capsys):
+    edit(
+        guarded,
+        "import pytest\n",
+        "import pytest\nfrom acme.testing import quarantine\n",
+    )
+    edit(guarded, "class TestRounding:", "@quarantine\nclass TestRounding:")
+    assert check(run_cli, capsys)[0] == 0, "unknown to keystones until configured"
+    pyproject = guarded / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text() + 'disabling_decorators = ["acme.testing.quarantine"]\n'
+    )
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "acme.testing.quarantine on class TestRounding" in err
+
+
+def test_an_owner_reviewed_skip_stays_green_until_it_changes(guarded, run_cli, capsys):
+    edit(guarded, "class TestRounding:", "@pytest.mark.skip\nclass TestRounding:")
+    assert run_cli("fix", "--id", "guard") == 1, "switching a guard off needs a note"
+    assert (
+        run_cli("fix", "--id", "guard", "-m", "Quarantined until the fix lands.") == 0
+    )
+    assert 'disabled_by = ["pytest.mark.skip on class TestRounding"]' in (
+        (guarded / SIDECAR).read_text()
+    )
+    assert check(run_cli, capsys)[0] == 0
+
+    edit(guarded, "@pytest.mark.skip\n", "")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "is no longer switched off by pytest.mark.skip on class TestRounding" in err
+    assert run_cli("fix", "--id", "guard", "-m", "Back on.") == 0
+    assert "disabled_by" not in (guarded / SIDECAR).read_text()
+    assert check(run_cli, capsys)[0] == 0
+
+
+def test_the_staged_hook_sees_it_and_warns(guarded, run_cli, capsys):
+    edit(guarded, "class TestRounding:", "@pytest.mark.skip\nclass TestRounding:")
+    status, err = check(run_cli, capsys, "--warn-only", "test_rounding.py")
+    assert status == 0
+    assert "warning: [C16]" in err
+
+
+def test_disabling_decorators_must_be_a_list_of_names(repo, run_cli):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + 'disabling_decorators = "flaky"\n')
+    assert run_cli("check", "--all", "--no-base") == 2
+
+
+def test_a_skip_on_the_function_itself_is_c3_alone(guarded, run_cli, capsys):
+    """Its own decorators are inside the hash, so C3 already says it changed."""
+    edit(guarded, "    def test_guard", "    @pytest.mark.skip\n    def test_guard")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "[C3]" in err
+    assert "[C16]" not in err

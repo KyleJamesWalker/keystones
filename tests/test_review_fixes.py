@@ -171,6 +171,37 @@ def test_file_scope_marker_goes_below_a_shebang(repo, run_cli):
     assert script.read_text().splitlines()[0] == "#!/usr/bin/env python3"
 
 
+@pytest.mark.parametrize(
+    ("path", "src", "extra", "marker"),
+    [
+        ("tool.py", "def f():\n    return 1\n", [], "# keystone(file): whole"),
+        pytest.param(
+            "main.tf",
+            'resource "x" "y" {\n  a = 1\n}\n',
+            [],
+            "# keystone(file): whole",
+            marks=pytest.mark.skipif(not ts.available(), reason="needs 'all'"),
+        ),
+        pytest.param(
+            "orders.sql",
+            "select 1 as x\n",
+            ["--hash", "text"],
+            "-- keystone(file, hash=text): whole",
+            marks=pytest.mark.skipif(not ts.available(), reason="needs 'all'"),
+        ),
+        ("notes.yaml", "a: 1\n", [], "# keystone(file): whole"),
+    ],
+    ids=["python", "hcl", "sql-text", "yaml"],
+)
+def test_add_without_a_symbol_writes_a_whole_file_marker(
+    repo, run_cli, capsys, path, src, extra, marker
+):
+    (repo / path).write_text(src)
+    assert run_cli("add", path, "--id", "whole", "-m", "why.", *extra) == 0
+    assert (repo / path).read_text().splitlines()[0] == marker
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+
+
 # --- sidecar robustness ----------------------------------------------------
 
 
@@ -211,6 +242,19 @@ def test_a_configured_double_star_exclude_covers_the_root(repo, run_cli):
     (repo / "build").mkdir()
     (repo / "build" / "b.py").write_text("# keystone: built\ndef f():\n    return 1\n")
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_the_sidecar_root_is_never_scanned_as_source(repo, run_cli):
+    """A whole-file sidecar stores the source, marker line included."""
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text().replace('"keystones"', '"gates"'))
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/gates/ @org/eng\n/pyproject.toml @org/eng\n/.github/CODEOWNERS @org/eng\n"
+    )
+    (repo / "gates").mkdir()
+    (repo / "gates" / "notes.md").write_text("# keystone: stray\n")
+    assert run_cli("check", "--all", "--no-base") == 0
+    assert run_cli("check", "gates/notes.md") == 0
 
 
 # --- CLI -------------------------------------------------------------------
@@ -315,3 +359,35 @@ def test_doctor_reports_an_unusable_token_rather_than_passing(tmp_path, monkeypa
     )
     findings = doctor.run(tmp_path)
     assert [f for f in findings if f.severity is Severity.ERROR]
+
+
+@pytest.mark.parametrize(
+    "name", ["package-lock.json", "uv.lock", "app/yarn.lock", "dist/app.min.js"]
+)
+def test_generated_files_are_never_read(repo, run_cli, monkeypatch, name):
+    """A lockfile churns on every dependency bump and never carries a marker,
+    so the staged hook must not pay to read it."""
+    from keystones import discovery
+
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# keystone(file): lock\n" + "x\n" * 10)
+
+    original = discovery._readable
+
+    def never(p):
+        if p == path:
+            raise AssertionError(f"read {p.name}")
+        return original(p)
+
+    monkeypatch.setattr(discovery, "_readable", never)
+    assert run_cli("check", name) == 0
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_generated_name_can_be_opted_back_in(repo, run_cli):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + 'include = ["uv.lock"]\n')
+    (repo / "uv.lock").write_text("# keystone(file): lock\nversion = 1\n")
+    assert run_cli("add", "--id", "lock", "-m", "Pinned deps.") == 0
+    assert run_cli("check", "--all", "--no-base") == 0

@@ -86,3 +86,65 @@ def test_a_file_the_grammar_cannot_parse_is_refused_not_hashed():
     """
     with pytest.raises(ts.ParseError, match="does not parse"):
         ts.markers("model.sql", DBT_MODEL)
+
+
+ORDERS = """with
+  raw as (
+    select 1 as x
+  ),
+  -- keystone(finance): net
+  net as (
+    select x * 0.97 as x from raw
+  )
+select * from net
+"""
+
+LEADING_COMMA = """with
+  raw as (
+    select 1 as x
+  )
+  -- keystone(finance): net
+  , net as (
+    select x * 0.97 as x from raw
+  )
+select * from net
+"""
+
+NOT_LAST = """with
+  -- keystone(finance): net
+  net as (
+    select 0.97 as x
+  ),
+  raw as (
+    select x from net
+  )
+select * from raw
+"""
+
+
+@pytest.mark.parametrize(
+    "src", [ORDERS, LEADING_COMMA, NOT_LAST], ids=["last", "leading-comma", "not-last"]
+)
+def test_a_cte_below_the_with_line_rehashes_from_its_stored_source(src):
+    """The stored slice is `net as (...)`, which is not SQL on its own."""
+    target = ts.resolve(src, ts.markers("orders.sql", src)[0])
+    stored = ts.canonical_source(src, target)
+    assert ts.hash_stored_source(stored, str(target)) == ts.hashes(src, target)[0]
+
+
+def test_a_freshly_added_cte_passes_every_check(repo, run_cli, capsys):
+    (repo / "orders.sql").write_text(
+        ORDERS.replace("  -- keystone(finance): net\n", "")
+    )
+    assert run_cli("add", "orders.sql::net", "--id", "net", "-m", "Net rate.") == 0
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+
+
+def test_add_refuses_a_cte_that_shares_its_first_line(repo, run_cli, capsys):
+    """A marker above the line would attach to the first CTE on it, not this one."""
+    src = "with a as (select 1 as x), b as (select x from a) select * from b\n"
+    (repo / "orders.sql").write_text(src)
+    assert run_cli("add", "orders.sql::b", "--id", "b", "-m", "Why.") == 1
+    assert "own line" in capsys.readouterr().err
+    assert (repo / "orders.sql").read_text() == src
+    assert not (repo / "keystones" / "default" / "b.md").exists()

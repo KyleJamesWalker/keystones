@@ -14,6 +14,19 @@ from keystones.models import Marker, Scope, Target
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
+# Decorators that switch a test off. A repo adds its own in config.
+DISABLERS = frozenset(
+    {
+        "pytest.mark.skip",
+        "pytest.mark.skipif",
+        "pytest.mark.xfail",
+        "unittest.skip",
+        "unittest.skipIf",
+        "unittest.skipUnless",
+        "unittest.expectedFailure",
+    }
+)
+
 name = "python"
 hasher_id = HASHER_ID
 extensions = (".py", ".pyi")
@@ -30,7 +43,7 @@ def _comments(src: str) -> list[tuple[int, str]]:
     return [(t.start[0], t.string) for t in _tokens(src) if t.type == tokenize.COMMENT]
 
 
-def _regions(path: str, src: str) -> dict[str, tuple[int, int]]:
+def _regions(path: str, src: str) -> dict[tuple[str, str], tuple[int, int]]:
     return marker_grammar.scan_lines(path, src, _comments(src))[1]
 
 
@@ -105,9 +118,9 @@ def _definitions(tree: ast.Module) -> list[tuple[str, ast.AST]]:
 def resolve(src: str, marker: Marker) -> Target:
     if marker.scope is Scope.REGION:
         regions = _regions(marker.path, src)
-        if marker.id not in regions:
+        if marker.key not in regions:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is unbalanced")
-        start, end = regions[marker.id]
+        start, end = regions[marker.key]
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)
@@ -126,6 +139,9 @@ def resolve(src: str, marker: Marker) -> Target:
         for qualname, node in defs:
             if _start_line(node) == following:
                 return Target(marker.path, qualname, following, node.end_lineno)
+        for name, node in _bindings(tree):
+            if node.lineno == following and _constant(tree, name, marker.path):
+                return Target(marker.path, name, following, node.end_lineno)
 
     enclosing = [
         (qualname, node)
@@ -149,6 +165,9 @@ def _node_for(src: str, target: Target) -> ast.AST:
     for qualname, node in _definitions(tree):
         if qualname == target.qualname:
             return node
+    constant = _constant(tree, target.qualname, target.path)
+    if constant is not None:
+        return constant
     raise ResolutionError(f"{target}: no longer present in {target.path}")
 
 
@@ -193,34 +212,145 @@ def hash_stored_source(source: str, target: str) -> str:
 
 
 def target_for_qualname(path: str, src: str, qualname: str) -> Target | None:
-    for name, node in _definitions(ast.parse(src)):
+    tree = ast.parse(src)
+    for name, node in _definitions(tree):
         if name == qualname:
             return Target(path, name, _start_line(node), node.end_lineno)
+    constant = _constant(tree, qualname, path)
+    if constant is not None:
+        return Target(path, qualname, constant.lineno, constant.end_lineno)
     return None
 
 
-def _module_assignments(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+def _assignments(body: list[ast.stmt], prefix: str = "") -> list[tuple[str, ast.AST]]:
     out: list[tuple[str, ast.AST]] = []
-    for node in tree.body:
+    for node in body:
         if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    out.append((target.id, node))
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            out.append((node.target.id, node))
+            names = [node.target.id]
+        else:
+            continue
+        out += [(f"{prefix}{name}", node) for name in names]
     return out
 
 
-def render_symbol(src: str, symbol: str) -> str | None:
-    """Canonical text for a `depends` target: a definition or a module constant."""
+def _module_assignments(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    return _assignments(tree.body)
+
+
+def _class_attributes(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    return [
+        pair
+        for qualname, node in _definitions(tree)
+        if isinstance(node, ast.ClassDef)
+        for pair in _assignments(node.body, f"{qualname}.")
+    ]
+
+
+def _bindings(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    """Module constants and class attributes, as `NAME` and `Class.ATTR`."""
+    return [*_module_assignments(tree), *_class_attributes(tree)]
+
+
+def _constant(tree: ast.Module, name: str, path: str) -> ast.AST | None:
+    """The one binding of `name`, which a node keystone may cover.
+
+    A second binding would let a hash-identical decoy sit under the marker while
+    the one that wins at runtime is rewritten, the hazard C6 guards for defs.
+    """
+    bound = [node for bound_name, node in _bindings(tree) if bound_name == name]
+    if len(bound) > 1:
+        raise ResolutionError(
+            f"{path}: {name} is assigned more than once in the same scope, so a "
+            "keystone on it cannot say which binding it protects"
+        )
+    return bound[0] if bound else None
+
+
+def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
+    """Canonical text for a `depends` target: a definition, constant or attribute."""
     tree = ast.parse(src)
     for qualname, node in _definitions(tree):
         if qualname == symbol:
             return render(node)
-    for name, node in _module_assignments(tree):
+    for name, node in _bindings(tree):
         if name == symbol:
             return render(node)
     return None
+
+
+def _imports(tree: ast.Module) -> dict[str, str]:
+    """Local names bound by module-level imports, to the dotted name they stand for."""
+    names: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    names[alias.asname] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return names
+
+
+def _dotted(expr: ast.AST) -> str | None:
+    if isinstance(expr, ast.Call):
+        expr = expr.func
+    parts = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None
+    return ".".join([expr.id, *reversed(parts)])
+
+
+def _marks(body: list[ast.stmt]) -> list[ast.AST]:
+    """What a `pytestmark = ...` in this scope applies, one expression per mark."""
+    out: list[ast.AST] = []
+    for name, node in _assignments(body):
+        if name == "pytestmark" and node.value is not None:
+            value = node.value
+            out += value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+    return out
+
+
+def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]:
+    """Every decorator or mark that switches this definition off, and from where.
+
+    The definition's own decorators are inside its hash, so they are C3's and
+    left out here. One on an enclosing class, or a `pytestmark`, disables it
+    without moving a byte of it.
+    """
+    tree = ast.parse(src)
+    defs = dict(_definitions(tree))
+    node = defs.get(qualname)
+    if not isinstance(node, _DEFS):
+        return []
+    imports = _imports(tree)
+    wanted = DISABLERS | set(extra)
+    found: list[str] = []
+
+    def scan(exprs: list[ast.AST], where: str) -> None:
+        for expr in exprs:
+            written = _dotted(expr)
+            if written is None:
+                continue
+            head, _, rest = written.partition(".")
+            name = imports.get(head, head) + (f".{rest}" if rest else "")
+            if any(name == w or name.endswith(f".{w}") for w in wanted):
+                found.append(f"{name} on {where}")
+
+    parts = qualname.split(".")
+    for depth in range(len(parts) - 1, 0, -1):
+        prefix = ".".join(parts[:depth])
+        enclosing = defs.get(prefix)
+        if isinstance(enclosing, ast.ClassDef):
+            scan(enclosing.decorator_list, f"class {prefix}")
+            scan(_marks(enclosing.body), f"class {prefix} pytestmark")
+    scan(_marks(tree.body), "module pytestmark")
+    return sorted(set(found))
 
 
 def hasher_id_for_path(path: str) -> str:

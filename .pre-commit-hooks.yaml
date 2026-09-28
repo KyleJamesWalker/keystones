@@ -4,7 +4,8 @@
     description: Fast drift check on staged files. C3 warns rather than blocking.
     entry: keystones check --warn-only
     language: python
-    types: [python]
+    # Every text file; the tool skips what carries no marker and is not a sidecar.
+    types: [text]
     stages: [pre-commit]
     # C3 warns and exits zero here; pre-commit hides a passing hook's output.
     verbose: true

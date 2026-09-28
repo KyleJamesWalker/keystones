@@ -2,27 +2,71 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
+from itertools import zip_longest
 from pathlib import Path
 
+from keystones import adapters
 from keystones.adapters.base import ResolutionError
 from keystones.config import Config
 from keystones.discovery import Resolved
 from keystones.models import Entry, Finding, Severity
 
+Key = tuple[str, str]
+
+
+def shared_ids(resolved: list[Resolved], entries: dict[Key, Entry]) -> set[str]:
+    """Ids used in more than one category, which a bare `--id` cannot name."""
+    by_id: dict[str, set[str]] = defaultdict(set)
+    for category, keystone_id in [*entries, *(i.marker.key for i in resolved)]:
+        by_id[keystone_id].add(category)
+    return {keystone_id for keystone_id, cats in by_id.items() if len(cats) > 1}
+
+
+def ref(key: Key, shared: set[str]) -> str:
+    """The id as `--id` accepts it: qualified only where a bare id is ambiguous."""
+    category, keystone_id = key
+    return f"{category}/{keystone_id}" if keystone_id in shared else keystone_id
+
+
+def category_mismatches(
+    resolved: list[Resolved], entries: dict[Key, Entry]
+) -> dict[Key, Entry]:
+    """Markers whose only entry sits in another category, by marker key.
+
+    Reported once as C7 rather than as an orphan marker plus an orphan entry.
+    """
+    marked = {item.marker.key for item in resolved}
+    out = {}
+    for item in resolved:
+        if item.marker.key in entries:
+            continue
+        elsewhere = [
+            entry
+            for key, entry in sorted(entries.items())
+            if entry.id == item.marker.id and key not in marked
+        ]
+        if len(elsewhere) == 1:
+            out[item.marker.key] = elsewhere[0]
+    return out
+
 
 def c1_orphan_markers(
-    resolved: list[Resolved], entries: dict[str, Entry]
+    resolved: list[Resolved], entries: dict[Key, Entry]
 ) -> list[Finding]:
     out = []
+    mismatched = category_mismatches(resolved, entries)
+    shared = shared_ids(resolved, entries)
     for item in resolved:
-        if item.marker.id not in entries:
+        if item.marker.key not in entries and item.marker.key not in mismatched:
             out.append(
                 Finding(
                     "C1",
                     Severity.ERROR,
                     f"keystone '{item.marker.id}' has no sidecar entry; "
-                    f'run `keystones add --id {item.marker.id} -m "<why>"`',
+                    f"run `keystones add --id {ref(item.marker.key, shared)} "
+                    '-m "<why>"`',
                     item.marker.path,
                     item.marker.lineno,
                 )
@@ -32,10 +76,11 @@ def c1_orphan_markers(
 
 def c2_orphan_entries(
     resolved: list[Resolved],
-    entries: dict[str, Entry],
+    entries: dict[Key, Entry],
     skipped: set[str] | None = None,
 ) -> list[Finding]:
-    seen = {item.marker.id for item in resolved}
+    seen = {item.marker.key for item in resolved}
+    paired = {entry.key for entry in category_mismatches(resolved, entries).values()}
     unreadable = skipped or set()
     return [
         Finding(
@@ -45,8 +90,9 @@ def c2_orphan_entries(
             "removed or its file is excluded",
             entry.path,
         )
-        for entry_id, entry in sorted(entries.items())
-        if entry_id not in seen
+        for key, entry in sorted(entries.items())
+        if key not in seen
+        and key not in paired
         and entry.target.split("::")[0].split("#")[0] not in unreadable
     ]
 
@@ -54,13 +100,14 @@ def c2_orphan_entries(
 def c3_c4_hashes(
     cfg: Config,
     resolved: list[Resolved],
-    entries: dict[str, Entry],
+    entries: dict[Key, Entry],
     warn_only: bool = False,
 ) -> list[Finding]:
     out = []
     severity = Severity.WARNING if warn_only else Severity.ERROR
+    shared = shared_ids(resolved, entries)
     for item in resolved:
-        entry = entries.get(item.marker.id)
+        entry = entries.get(item.marker.key)
         if entry is None:
             continue
         # The basis is recorded in two places on purpose, so editing one and
@@ -81,7 +128,7 @@ def c3_c4_hashes(
                 )
             )
             continue
-        expected_hasher = item.adapter.hasher_id_for_path(item.marker.path)
+        expected_hasher = adapters.hasher_id(item.adapter, item.target)
         rehashed = entry.hasher and entry.hasher != expected_hasher
         src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
         try:
@@ -99,7 +146,9 @@ def c3_c4_hashes(
             )
             continue
         target = str(item.target)
-        fix_hint = f'run `keystones fix --id {entry.id} -m "<why it changed>"`'
+        fix_hint = (
+            f'run `keystones fix --id {ref(entry.key, shared)} -m "<why it changed>"`'
+        )
 
         # Without this the marker can be moved onto a hash-identical decoy while
         # the real definition is rewritten, and every other check stays green.
@@ -122,10 +171,10 @@ def c3_c4_hashes(
                     "C13",
                     severity,
                     f"keystone '{entry.id}' was hashed by {entry.hasher}, this "
-                    f"install uses {expected_hasher}, and the two disagree. "
-                    "Whether the code changed cannot be told from here. Run "
-                    "`keystones migrate --check`, or install the grammar "
-                    "version this repo pins.",
+                    f"install uses {expected_hasher}, and the two disagree: "
+                    f"{hasher_difference(entry.hasher, expected_hasher)}. "
+                    "Whether the code changed cannot be told from here. "
+                    "`keystones migrate --check` says what would move.",
                     item.marker.path,
                     item.marker.lineno,
                     owner_hint=entry.category,
@@ -156,11 +205,174 @@ def c3_c4_hashes(
     return out
 
 
-def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
+def disablers(cfg: Config, adapter, src: str, target) -> list[str]:
+    """What switches the target off from outside its hash; only Python can tell."""
+    find = getattr(adapter, "disablers", None)
+    if find is None or target.qualname is None or target.region:
+        return []
+    return find(src, target.qualname, cfg.disabling_decorators)
+
+
+def c16_disabled(
+    cfg: Config,
+    resolved: list[Resolved],
+    entries: dict[Key, Entry],
+    warn_only: bool = False,
+) -> list[Finding]:
+    """Switching a guard test off is a review event even when no byte of it moves."""
+    out = []
+    severity = Severity.WARNING if warn_only else Severity.ERROR
+    shared = shared_ids(resolved, entries)
+    for item in resolved:
+        entry = entries.get(item.marker.key)
+        if entry is None:
+            continue
+        src = (cfg.repo_root / item.marker.path).read_text(encoding="utf-8")
+        try:
+            now = disablers(cfg, item.adapter, src, item.target)
+        except SyntaxError:
+            continue
+        if now == sorted(entry.disabled_by):
+            continue
+        added = [d for d in now if d not in entry.disabled_by]
+        removed = [d for d in entry.disabled_by if d not in now]
+        what = (
+            f"is switched off by {', '.join(added)}"
+            if added
+            else f"is no longer switched off by {', '.join(removed)}"
+        )
+        out.append(
+            Finding(
+                "C16",
+                severity,
+                f"keystone '{entry.id}' {what}. Its owner must review this. "
+                f"run `keystones fix --id {ref(entry.key, shared)} "
+                '-m "<why>"`',
+                item.marker.path,
+                item.marker.lineno,
+                owner_hint=entry.category,
+            )
+        )
+    return out
+
+
+def c18_unreviewed(
+    cfg: Config, resolved: list[Resolved], entries: dict[Key, Entry], scoped: bool
+) -> list[Finding]:
+    """A gate on a path nobody reviews is a gate that can only fail."""
+    out = []
+    seen: set[Key] = set()
+    for item in resolved:
+        pattern = cfg.unreviewed_by(item.marker.path)
+        if pattern is None:
+            continue
+        seen.add(item.marker.key)
+        out.append(
+            Finding(
+                "C18",
+                Severity.ERROR,
+                f"keystone '{item.marker.id}' is in {item.marker.path}, which "
+                f"'{pattern}' in [tool.keystones] unreviewed says is rewritten "
+                "without review, so no gate can hold there. Remove the marker "
+                "and its entry, or take the path off the list.",
+                item.marker.path,
+                item.marker.lineno,
+                owner_hint=item.marker.category,
+            )
+        )
+    if scoped:
+        return out
+    for key, entry in sorted(entries.items()):
+        rel = entry.target.split("::")[0].split("#")[0]
+        pattern = cfg.unreviewed_by(rel)
+        if pattern is None or key in seen:
+            continue
+        out.append(
+            Finding(
+                "C18",
+                Severity.ERROR,
+                f"keystone '{entry.id}' targets {rel}, which '{pattern}' in "
+                "[tool.keystones] unreviewed says is rewritten without review, "
+                "so no gate can hold there. Delete the entry, or take the path "
+                "off the list.",
+                entry.path,
+                owner_hint=entry.category,
+            )
+        )
+    return out
+
+
+_VERSIONED = re.compile(r"^(?P<name>[^@/]+)@(?P<version>[^/]+)(?P<rest>(?:/[^/]*)*)$")
+_SERIALIZERS = {
+    "keystones-ts": "tree-sitter serializer",
+    "keystones-ast": "Python AST serializer",
+    "keystones-text": "text hasher",
+    "keystones-plugin": "plugin adapter",
+}
+_PIN = (
+    "Pin the version the repo chose, in additional_dependencies for the hook, "
+    "or move every keystone with `keystones migrate`"
+)
+
+
+def hasher_difference(recorded: str, expected: str) -> str:
+    """What moved between two hasher ids, in words that say what to do.
+
+    `keystones-ts/2+typescript@1.20.0/<spec>+dbt/1`: family and serializer,
+    then the grammar or parsing library with its version and spec digest,
+    then any preprocessor with its version.
+    """
+    (r_family, _, r_serial), *r_parts = [
+        seg.partition("/") if i == 0 else seg
+        for i, seg in enumerate(recorded.split("+"))
+    ]
+    (e_family, _, e_serial), *e_parts = [
+        seg.partition("/") if i == 0 else seg
+        for i, seg in enumerate(expected.split("+"))
+    ]
+    if r_family != e_family:
+        return (
+            f"the basis moved from {r_family.removeprefix('keystones-')} to "
+            f"{e_family.removeprefix('keystones-')}"
+        )
+    notes = []
+    if r_serial != e_serial:
+        label = _SERIALIZERS.get(r_family, "serializer")
+        notes.append(f"keystones' {label} moved from {r_serial} to {e_serial}")
+    for r_part, e_part in zip_longest(r_parts, e_parts, fillvalue=""):
+        if r_part == e_part:
+            continue
+        r_match, e_match = _VERSIONED.match(r_part), _VERSIONED.match(e_part)
+        if r_match and e_match and r_match["name"] == e_match["name"]:
+            name = r_match["name"]
+            if r_match["version"] != e_match["version"]:
+                package = (
+                    "tree-sitter-language-pack" if r_family == "keystones-ts" else name
+                )
+                notes.append(
+                    f"{package} {r_match['version']} hashed the sidecar and "
+                    f"{e_match['version']} is installed. {_PIN}"
+                )
+            if r_match["rest"] != e_match["rest"]:
+                what = "spec" if r_family == "keystones-ts" else "options"
+                notes.append(
+                    f"the {name} {what} in [[tool.keystones.language]] changed"
+                )
+            continue
+        r_name, _, r_version = r_part.partition("/")
+        e_name, _, e_version = e_part.partition("/")
+        if r_name and r_name == e_name:
+            notes.append(f"preprocessor {r_name} moved from {r_version} to {e_version}")
+        else:
+            notes.append(f"{r_part or 'nothing'} became {e_part or 'nothing'}")
+    return "; ".join(notes) or "the ids differ in a way keystones cannot name"
+
+
+def c5_stored_source(entries: dict[Key, Entry]) -> list[Finding]:
     from keystones import adapters
 
     out = []
-    for entry in sorted(entries.values(), key=lambda e: e.id):
+    for entry in sorted(entries.values(), key=lambda e: (e.id, e.category)):
         if not entry.source:
             out.append(
                 Finding(
@@ -175,7 +387,7 @@ def c5_stored_source(entries: dict[str, Entry]) -> list[Finding]:
         if adapters.needs_extra(rel):
             continue
         adapter = adapters.for_entry(entry)
-        if entry.hasher and entry.hasher != adapter.hasher_id_for_path(rel):
+        if entry.hasher and entry.hasher != adapters.hasher_id(adapter, entry.target):
             continue
         try:
             actual = adapter.hash_stored_source(entry.source, entry.target)
@@ -244,7 +456,7 @@ def c7_categories(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
     ]
 
 
-def c10_index(cfg: Config, entries: dict[str, Entry]) -> list[Finding]:
+def c10_index(cfg: Config, entries: dict[Key, Entry]) -> list[Finding]:
     from keystones.sidecar import render_index
 
     path = cfg.index_path
@@ -287,11 +499,15 @@ def run_all(
     skipped: set[str] | None = None,
 ) -> list[Finding]:
     """`scoped` means only some files were seen, so whole-repo checks are skipped."""
-    entries = {entry.id: entry for entry in entry_list}
-    findings = c1_orphan_markers(resolved, entries)
+    entries = {entry.key: entry for entry in entry_list}
+    findings = c18_unreviewed(cfg, resolved, entries, scoped)
+    doomed = {f.path for f in findings}
+    resolved = [item for item in resolved if item.marker.path not in doomed]
+    findings += c1_orphan_markers(resolved, entries)
     findings += c3_c4_hashes(cfg, resolved, entries, warn_only=warn_only)
     findings += c7_categories(cfg, resolved)
     findings += c7_category_agreement(resolved, entries)
+    findings += c16_disabled(cfg, resolved, entries, warn_only=warn_only)
     if not scoped:
         findings += c2_orphan_entries(resolved, entries, skipped)
         findings += c5_stored_source(entries)
@@ -299,6 +515,7 @@ def run_all(
         findings += c6_shadowed_targets(cfg, resolved)
         findings += c8_ownership(cfg)
         findings += c11_dependencies(cfg, entry_list)
+        findings += c17_twins(cfg, entry_list)
         findings += stale_report(cfg, entry_list)
         findings += c10_index(cfg, entries)
         if base:
@@ -306,25 +523,81 @@ def run_all(
     return findings
 
 
+class _Rulesets:
+    """The rules C8 may accept in place of CODEOWNERS, read once and only on demand.
+
+    The read is a GitHub API call, so a repo CODEOWNERS fully covers never pays it.
+    """
+
+    def __init__(self, cfg: Config) -> None:
+        self._cfg = cfg
+        self._rules: list | None = None
+        self.findings: list[Finding] = []
+
+    @property
+    def rules(self) -> list:
+        if self._rules is None:
+            self._rules, self.findings = _ruleset_reviewers(self._cfg)
+        return self._rules
+
+
+def _ruleset_reviewers(cfg: Config) -> tuple[list, list[Finding]]:
+    from keystones import doctor
+
+    if not cfg.codeowners_from_rulesets:
+        return [], []
+    try:
+        return doctor.required_reviewers(cfg.repo_root), []
+    except doctor.Unavailable as exc:
+        return [], [
+            Finding(
+                "C8",
+                Severity.WARNING,
+                f"codeowners_from_rulesets is on, but the branch rules could not "
+                f"be read ({exc}), so only CODEOWNERS was checked",
+            )
+        ]
+
+
+def _covered_by_ruleset(
+    rulesets: _Rulesets, rel: str, problem: Finding, what: str | None = None
+) -> Finding:
+    """A notice naming the ruleset that covers `rel`, or the problem unchanged."""
+    for rule in rulesets.rules:
+        pattern = rule.covering(rel)
+        if pattern is not None:
+            return Finding(
+                "C8",
+                Severity.NOTICE,
+                f"{what or rel} is owned by {rule.source}, which requires "
+                f"{rule.minimum_approvals} approval(s) from {rule.reviewer} on "
+                f"'{pattern}'",
+            )
+    return problem
+
+
 def c8_ownership(cfg: Config) -> list[Finding]:
     """The gate is only real if its own files are owned. See keystones/codeowners.py."""
     from keystones import codeowners
 
     owners_file, rules = codeowners.find(cfg.repo_root)
-    if owners_file is None:
+    rulesets = _Rulesets(cfg)
+    findings: list[Finding] = []
+    if owners_file is None and not rulesets.rules:
         return [
+            *rulesets.findings,
             Finding(
                 "C8",
                 Severity.ERROR,
                 "no CODEOWNERS file; every keystone is unguarded. Expected one of "
                 + ", ".join(codeowners.SEARCH_PATHS),
-            )
+            ),
         ]
 
-    owners_rel = str(owners_file.relative_to(cfg.repo_root))
-    findings: list[Finding] = []
+    owners_rel = str(owners_file.relative_to(cfg.repo_root)) if owners_file else None
 
-    gate_files = [owners_rel, "pyproject.toml"]
+    gate_files = [owners_rel] if owners_rel else []
+    gate_files.append("pyproject.toml")
     for extra in (".pre-commit-config.yaml", ".pre-commit-hooks.yaml"):
         if (cfg.repo_root / extra).is_file():
             gate_files.append(extra)
@@ -338,12 +611,16 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         rule = codeowners.owners_for(rules, rel)
         if rule is None or not rule.owners:
             findings.append(
-                Finding(
-                    "C8",
-                    Severity.ERROR,
-                    f"{rel} is part of the gate but has no CODEOWNERS owner, so the "
-                    "gate can be removed without review",
-                    owners_rel,
+                _covered_by_ruleset(
+                    rulesets,
+                    rel,
+                    Finding(
+                        "C8",
+                        Severity.ERROR,
+                        f"{rel} is part of the gate but has no CODEOWNERS owner, "
+                        "so the gate can be removed without review",
+                        owners_rel,
+                    ),
                 )
             )
 
@@ -351,29 +628,40 @@ def c8_ownership(cfg: Config) -> list[Finding]:
         probe = f"{cfg.root}/{category}/_probe.md"
         rule = codeowners.owners_for(rules, probe)
         if rule is None or not rule.owners:
-            findings.append(
-                Finding(
-                    "C8",
-                    Severity.ERROR,
-                    f"category '{category}' has no CODEOWNERS owner; editing its "
-                    "sidecars would require no review",
-                    owners_rel,
-                )
+            problem = Finding(
+                "C8",
+                Severity.ERROR,
+                f"category '{category}' has no CODEOWNERS owner; editing its "
+                "sidecars would require no review",
+                owners_rel,
             )
+        elif not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
+            problem = Finding(
+                "C8",
+                Severity.ERROR,
+                f"category '{category}' is owned by '{rule.pattern}' "
+                f"(line {rule.lineno}), a rule outside {cfg.root}/. CODEOWNERS is "
+                "last-match-wins, so that pattern silently reassigned the sidecars",
+                owners_rel,
+                rule.lineno,
+            )
+        else:
             continue
-        if not rule.pattern.lstrip("/").startswith(f"{cfg.root}/"):
-            findings.append(
-                Finding(
-                    "C8",
-                    Severity.ERROR,
-                    f"category '{category}' is owned by '{rule.pattern}' "
-                    f"(line {rule.lineno}), a rule outside {cfg.root}/. CODEOWNERS is "
-                    "last-match-wins, so that pattern silently reassigned the sidecars",
-                    owners_rel,
-                    rule.lineno,
-                )
+        findings.append(
+            _covered_by_ruleset(
+                rulesets,
+                probe,
+                problem,
+                f"category '{category}' ({cfg.root}/{category}/)",
             )
-    return findings
+        )
+    return [*rulesets.findings, *findings]
+
+
+def c17_twins(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
+    from keystones import twins
+
+    return twins.check(cfg.repo_root, entry_list)
 
 
 def c11_dependencies(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
@@ -426,7 +714,7 @@ def hasher_mismatch(cfg: Config, entry_list: list[Entry]) -> list[Finding]:
         if adapters.needs_extra(rel):
             continue
         adapter = adapters.for_path(rel)
-        expected = adapter.hasher_id_for_path(rel)
+        expected = adapters.hasher_id(adapter, entry.target)
         if entry.hasher and entry.hasher != expected:
             out.append(
                 Finding(
@@ -469,22 +757,21 @@ def c6_shadowed_targets(cfg: Config, resolved: list[Resolved]) -> list[Finding]:
 
 
 def c7_category_agreement(
-    resolved: list[Resolved], entries: dict[str, Entry]
+    resolved: list[Resolved], entries: dict[Key, Entry]
 ) -> list[Finding]:
     """A mismatch means a different team reviews than the marker names."""
-    out = []
-    for item in resolved:
-        entry = entries.get(item.marker.id)
-        if entry is not None and entry.category != item.marker.category:
-            out.append(
-                Finding(
-                    "C7",
-                    Severity.ERROR,
-                    f"marker for '{entry.id}' says category "
-                    f"'{item.marker.category}' but its sidecar sits in "
-                    f"'{entry.category}', so a different team owns the review",
-                    item.marker.path,
-                    item.marker.lineno,
-                )
-            )
-    return out
+    mismatched = category_mismatches(resolved, entries)
+    return [
+        Finding(
+            "C7",
+            Severity.ERROR,
+            f"marker for '{item.marker.id}' says category "
+            f"'{item.marker.category}' but its sidecar sits in "
+            f"'{mismatched[item.marker.key].category}', so a different team owns "
+            "the review",
+            item.marker.path,
+            item.marker.lineno,
+        )
+        for item in resolved
+        if item.marker.key in mismatched
+    ]

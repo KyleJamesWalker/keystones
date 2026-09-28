@@ -21,7 +21,7 @@ repos:
   # makes its hashes deterministic:
   #
   #   - repo: https://github.com/KyleJamesWalker/keystones
-  #     rev: v0.1.0
+  #     rev: v0.3.0
   #     hooks:
   #       - id: keystones-all
   #         additional_dependencies: ["tree-sitter-language-pack==1.20.0"]
@@ -36,7 +36,7 @@ repos:
         name: keystones (staged)
         entry: uv run keystones check --warn-only
         language: system
-        types: [python]
+        types: [text]
         # Local feedback only. CI runs the whole-repo hook below instead.
         stages: [pre-commit]
         verbose: true

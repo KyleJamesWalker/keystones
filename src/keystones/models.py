@@ -25,6 +25,10 @@ class Marker:
     # only answer for a file whose extension has exactly one parser.
     hash_kind: str | None = None
 
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.category, self.id)
+
 
 @dataclass(frozen=True)
 class Target:
@@ -60,16 +64,27 @@ class Entry:
     review_every: str | None = None
     depends: list[str] = field(default_factory=list)
     depends_hash: str = ""
+    # What switched this keystone's test off when its owner last reviewed it.
+    disabled_by: list[str] = field(default_factory=list)
+    # Same-repo copies that must keep hashing like this keystone. See C17.
+    twins: list[str] = field(default_factory=list)
     why: str = ""
     source: str = ""
     source_lang: str = "python"
     history: list[str] = field(default_factory=list)
     path: str = ""
 
+    @property
+    def key(self) -> tuple[str, str]:
+        """Ids are unique within a category, matching `<root>/<category>/<id>.md`."""
+        return (self.category, self.id)
+
 
 class Severity(StrEnum):
     ERROR = "error"
     WARNING = "warning"
+    # Passed, but by a route worth saying out loud.
+    NOTICE = "notice"
 
 
 @dataclass(frozen=True)

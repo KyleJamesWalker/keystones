@@ -30,23 +30,30 @@ class Outcome:
 
 def _target_of(resolved: list[Resolved], entry: Entry) -> Resolved | None:
     for item in resolved:
-        if item.marker.id == entry.id:
+        if item.marker.key == entry.key:
             return item
     return None
 
 
 def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Outcome]:
     outcomes: list[Outcome] = []
-    for entry in sorted(entries, key=lambda e: e.id):
+    for entry in sorted(entries, key=lambda e: (e.id, e.category)):
         rel = entry.target.split("::")[0].split("#")[0]
         if adapters.needs_extra(rel):
             continue
-        adapter = adapters.for_entry(entry)
-        expected = adapter.hasher_id_for_path(rel)
-        if not entry.hasher or entry.hasher == expected:
+        item = _target_of(resolved, entry)
+        # A basis change from config or a marker edit is C14 until migrated;
+        # the stored source is re-rendered under the basis the marker now names.
+        kind_moved = (
+            item is not None
+            and bool(entry.hash)
+            and entry.hash != item.adapter.kind_for_path(item.marker.path)
+        )
+        adapter = item.adapter if kind_moved else adapters.for_entry(entry)
+        expected = adapters.hasher_id(adapter, entry.target)
+        if not kind_moved and (not entry.hasher or entry.hasher == expected):
             continue
 
-        item = _target_of(resolved, entry)
         if item is None:
             outcomes.append(
                 Outcome(

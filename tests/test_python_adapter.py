@@ -68,7 +68,7 @@ def test_marker_shaped_string_literal_is_not_a_marker():
 
 
 def test_marker_attached_to_nothing_is_an_error():
-    src = "# keystone: dangling\nX = 1\n"
+    src = "# keystone: dangling\nprint(1)\n"
     with pytest.raises(ResolutionError, match="attaches to nothing"):
         adapter.resolve(src, one_marker(src))
 
@@ -88,3 +88,153 @@ def test_canonical_source_includes_decorators():
     assert source.startswith("@functools.cache")
     rehashed = adapter.hash_stored_source(source, "x.py::compute_payout")
     assert rehashed == adapter.hashes(DECORATED, target)[0]
+
+
+GUARD = """import pytest
+
+
+# keystone: guard
+def test_guard():
+    assert 1
+"""
+
+
+@pytest.mark.parametrize(
+    "decorator",
+    [
+        "@pytest.mark.skip(reason='flaky')",
+        "@pytest.mark.xfail",
+        "@pytest.mark.skipif(True, reason='x')",
+    ],
+)
+def test_switching_off_a_guard_test_is_drift(repo, run_cli, capsys, decorator):
+    """The change most worth catching on a test keystone is the one that disables it."""
+    (repo / "test_guard.py").write_text(GUARD)
+    assert run_cli("add", "--id", "guard", "-m", "Guards the rounding contract.") == 0
+    (repo / "test_guard.py").write_text(
+        GUARD.replace("def test_guard", f"{decorator}\ndef test_guard")
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'guard' changed" in capsys.readouterr().err
+
+
+RATES = """BASE_RATE = 0.03
+
+
+class Fees:
+    SURCHARGE: float = 0.5
+
+    class Card:
+        FLAT = 1
+
+
+def fee(amount):
+    return amount * BASE_RATE
+"""
+
+
+def test_a_module_constant_takes_a_node_marker():
+    src = RATES.replace("BASE_RATE = 0.03", "# keystone: base-rate\nBASE_RATE = 0.03")
+    target = adapter.resolve(src, one_marker(src))
+    assert (target.qualname, target.start, target.end) == ("BASE_RATE", 2, 2)
+
+
+def test_a_constant_keystone_gates_its_value_not_its_spelling():
+    src = RATES.replace("BASE_RATE = 0.03", "# keystone: base-rate\nBASE_RATE = 0.03")
+    target = adapter.resolve(src, one_marker(src))
+    before = adapter.hashes(src, target)[0]
+    assert adapter.hashes(src.replace("= 0.03", "=0.030"), target)[0] == before
+    assert adapter.hashes(src.replace("= 0.03", "= 0.04"), target)[0] != before
+
+
+def test_a_constant_bound_twice_refuses_a_keystone():
+    """A decoy binding above the one that wins at runtime."""
+    src = "# keystone: base-rate\nBASE_RATE = 0.03\nBASE_RATE = 0.9\n"
+    with pytest.raises(ResolutionError, match="assigned more than once"):
+        adapter.resolve(src, one_marker(src))
+
+
+def test_a_class_attribute_takes_a_node_marker():
+    src = RATES.replace(
+        "    SURCHARGE: float = 0.5", "    # keystone: fees\n    SURCHARGE: float = 0.5"
+    )
+    target = adapter.resolve(src, one_marker(src))
+    assert (target.qualname, target.start, target.end) == ("Fees.SURCHARGE", 6, 6)
+
+
+def test_a_nested_class_attribute_takes_a_node_marker():
+    src = RATES.replace(
+        "        FLAT = 1", "        # keystone: flat\n        FLAT = 1"
+    )
+    assert adapter.resolve(src, one_marker(src)).qualname == "Fees.Card.FLAT"
+
+
+def test_a_class_attribute_bound_twice_refuses_a_keystone():
+    src = "class Fees:\n    # keystone: rate\n    RATE = 1\n    RATE = 2\n"
+    with pytest.raises(ResolutionError, match="assigned more than once"):
+        adapter.resolve(src, one_marker(src))
+
+
+def test_the_same_attribute_name_in_two_classes_is_not_a_rebinding():
+    src = "class A:\n    # keystone: rate\n    RATE = 1\n\n\nclass B:\n    RATE = 2\n"
+    assert adapter.resolve(src, one_marker(src)).qualname == "A.RATE"
+
+
+def test_a_class_attribute_keystone_end_to_end(repo, run_cli, capsys):
+    (repo / "rates.py").write_text(RATES)
+    assert (
+        run_cli("add", "rates.py::Fees.SURCHARGE", "--id", "surcharge", "-m", "Why.")
+        == 0
+    )
+    assert "    # keystone: surcharge\n    SURCHARGE" in (repo / "rates.py").read_text()
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+    path = repo / "rates.py"
+    path.write_text(path.read_text().replace("0.5", "0.6"))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'surcharge' changed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    [
+        ("BASE_RATE", "0.03", "0.04"),
+        ("Fees.SURCHARGE", "0.5", "0.6"),
+        ("Fees.Card.FLAT", "FLAT = 1", "FLAT = 2"),
+    ],
+)
+def test_depends_reaches_constants_and_class_attributes(symbol, old, new):
+    before = adapter.render_symbol(RATES, symbol)
+    assert before is not None
+    assert adapter.render_symbol(RATES.replace(old, new), symbol) != before
+
+
+def test_a_constant_keystone_end_to_end(repo, run_cli, capsys):
+    (repo / "rates.py").write_text(RATES)
+    assert run_cli("add", "rates.py::BASE_RATE", "--id", "base-rate", "-m", "Why.") == 0
+    assert "# keystone: base-rate\nBASE_RATE" in (repo / "rates.py").read_text()
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+    path = repo / "rates.py"
+    path.write_text(path.read_text().replace("0.03", "0.04"))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'base-rate' changed" in capsys.readouterr().err
+
+
+def test_a_class_attribute_dependency_end_to_end(repo, run_cli, capsys):
+    (repo / "rates.py").write_text(RATES)
+    assert (
+        run_cli(
+            "add",
+            "rates.py::fee",
+            "--id",
+            "fee",
+            "-m",
+            "Why.",
+            "--depends",
+            "rates.py::Fees.SURCHARGE",
+        )
+        == 0
+    )
+    path = repo / "rates.py"
+    path.write_text(path.read_text().replace("0.5", "0.6"))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C11] a dependency of keystone 'fee' changed" in capsys.readouterr().err

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import re
 import textwrap
 import warnings
 from dataclasses import dataclass
@@ -75,6 +76,7 @@ SPECS: tuple[LanguageSpec, ...] = (
                 "type_alias_declaration",
                 "variable_declarator",
                 "abstract_class_declaration",
+                "public_field_definition",
             }
         ),
         wrappers=frozenset(
@@ -92,6 +94,7 @@ SPECS: tuple[LanguageSpec, ...] = (
                 "interface_declaration",
                 "type_alias_declaration",
                 "variable_declarator",
+                "public_field_definition",
             }
         ),
         wrappers=frozenset({"export_statement", "lexical_declaration"}),
@@ -106,8 +109,11 @@ SPECS: tuple[LanguageSpec, ...] = (
                 "class_declaration",
                 "method_definition",
                 "variable_declarator",
+                "field_definition",
             }
         ),
+        # A class field names itself in `property`, not `name`.
+        name_fields=("name", "property"),
         wrappers=frozenset({"export_statement", "lexical_declaration"}),
     ),
     LanguageSpec(
@@ -405,11 +411,19 @@ def _render(
     return f"{node.type}({','.join(parts)})"
 
 
+# A destructuring declarator is named by its pattern, `{ a, b } = ...`.
+_PATTERNS = frozenset({"object_pattern", "array_pattern"})
+
+
 def _node_name(node, spec: LanguageSpec) -> str | None:
     for field_name in spec.name_fields:
         child = node.child_by_field_name(field_name)
         if child is not None:
-            return child.text.decode("utf-8", "replace")
+            text = child.text.decode("utf-8", "replace")
+            if child.type in _PATTERNS:
+                # Spelled as a formatter left it, the name would move on a reformat.
+                text = re.sub(r",(?=[}\]])", "", re.sub(r"\s+", "", text))
+            return text
     if spec.label_children:
         labels = [
             c.text.decode("utf-8", "replace").strip('"')
@@ -488,7 +502,7 @@ def markers(path: str, src: str) -> list[Marker]:
     return found
 
 
-def _regions(path: str, src: str) -> dict[str, tuple[int, int]]:
+def _regions(path: str, src: str) -> dict[tuple[str, str], tuple[int, int]]:
     spec = spec_for(path)
     root = _parse(spec, src).root_node
     return marker_grammar.scan_lines(path, src, _comment_lines(root, spec))[1]
@@ -500,9 +514,9 @@ def resolve(src: str, marker: Marker) -> Target:
 
     if marker.scope is Scope.REGION:
         regions = _regions(marker.path, src)
-        if marker.id not in regions:
+        if marker.key not in regions:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is unbalanced")
-        start, end = regions[marker.id]
+        start, end = regions[marker.key]
         if start > end:
             raise ResolutionError(f"{marker.path}: region '{marker.id}' is empty")
         return Target(marker.path, None, start, end, region=True)
@@ -541,6 +555,19 @@ def _node_for(src: str, target: Target):
         if qualname == target.qualname:
             return node, spec
     raise ResolutionError(f"{target}: no longer present in {target.path}")
+
+
+# The bodies a local can sit in. A real definition has none above it.
+_BODIES = frozenset({"statement_block", "class_body"})
+
+
+def _inside_body(node) -> bool:
+    current = node.parent
+    while current is not None:
+        if current.type in _BODIES:
+            return True
+        current = current.parent
+    return False
 
 
 def _outermost(node, spec: LanguageSpec):
@@ -602,7 +629,16 @@ def hash_stored_source(source: str, target: str) -> str:
     fragment = textwrap.dedent(source)
 
     root = _parse(spec, fragment, strict=False).root_node
+    if root.has_error and "cte" in spec.definitions:
+        # A CTE below its WITH line is stored as `name as (...)`, not SQL alone.
+        body = fragment.strip().strip(",").strip()
+        shelled = _parse(spec, f"with {body} select 1", strict=False).root_node
+        if not shelled.has_error:
+            root = shelled
     for _name, node in _definitions(root, spec):
+        if spec.language in _JS_LIKE and _inside_body(node):
+            # A field or method alone reads as an expression; this is a local in it.
+            break
         # Must render from the same node `hashes` does: the outermost wrapper.
         return digest(
             (_render(_outermost(node, spec), spec.comments, spec) or "") + suffix
@@ -624,7 +660,54 @@ def hash_stored_source(source: str, target: str) -> str:
     raise ResolutionError(f"{target}: stored source contains no definition")
 
 
-def render_symbol(src: str, symbol: str) -> str | None:
+# Languages whose attributes can be named in `depends`, as `NAME` at the top
+# level or `<block qualname>.NAME` inside a block.
+_ATTRIBUTE_NODES = {"hcl": "attribute"}
+
+
+def _attributes(root, spec: LanguageSpec) -> list[tuple[str, object]]:
+    node_type = _ATTRIBUTE_NODES.get(spec.language)
+    if node_type is None:
+        return []
+    # Node objects are recreated on every access, so key by position, not id.
+    blocks = {
+        (node.start_byte, node.end_byte): qualname
+        for qualname, node in _definitions(root, spec)
+    }
+    out: list[tuple[str, object]] = []
+
+    def walk(node, prefix: str) -> None:
+        for child in node.children:
+            if child.type == node_type:
+                name = next(
+                    (
+                        c.text.decode("utf-8", "replace")
+                        for c in child.children
+                        if c.type == "identifier"
+                    ),
+                    None,
+                )
+                if name:
+                    out.append((f"{prefix}.{name}" if prefix else name, child))
+                continue
+            walk(child, blocks.get((child.start_byte, child.end_byte), prefix))
+
+    walk(root, "")
+    return out
+
+
+def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
+    """Canonical text for a `depends` target: a definition, or an HCL attribute."""
+    spec = spec_for(path)
+    if spec is None:
+        return None
+    root = _parse(spec, src).root_node
+    for qualname, node in _definitions(root, spec):
+        if qualname == symbol:
+            return _render(_outermost(node, spec), spec.comments, spec)
+    for qualname, node in _attributes(root, spec):
+        if qualname == symbol:
+            return _render(node, spec.comments, spec)
     return None
 
 

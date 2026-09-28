@@ -214,6 +214,8 @@ def test_a_grammar_mismatch_that_disagrees_is_c13_not_drift(repo, run_cli, capsy
     assert run_cli("check", "--all", "--no-base") == 1
     err = capsys.readouterr().err
     assert "[C13]" in err and "[C3]" not in err
+    assert "tree-sitter-language-pack 0.0.1 hashed the sidecar" in err
+    assert "additional_dependencies" in err
 
 
 # Pinned under the grammar pack the dev group installs. A change here means a
@@ -381,3 +383,122 @@ def test_a_spec_edit_migrates_across_when_the_code_is_unchanged(
     _respec(monkeypatch, wrappers=frozenset())
     assert run_cli("migrate") == 0
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+COMPONENT = """import { useCallback, useMemo } from "react";
+
+export function Checkout({ total }) {
+  // keystone: pay
+  const onPay = useCallback(() => {
+    return charge(total);
+  }, [total]);
+  const fee = useMemo(() => total * 0.03, [total]);
+  function inner() {
+    const deep = 1;
+    return deep;
+  }
+  return <button onClick={onPay}>{fee}</button>;
+}
+
+export const Cart = ({ items }) => {
+  const count = useMemo(() => items.length, [items]);
+  const { first, last } = items;
+  return count;
+};
+"""
+
+
+@pytest.mark.parametrize("path", ["checkout.jsx", "checkout.tsx"])
+def test_nested_declarators_take_their_enclosing_qualname(path):
+    spec = ts.spec_for(path)
+    names = [
+        name for name, _ in ts._definitions(ts._parse(spec, COMPONENT).root_node, spec)
+    ]
+    assert names == [
+        "Checkout",
+        "Checkout.onPay",
+        "Checkout.fee",
+        "Checkout.inner",
+        "Checkout.inner.deep",
+        "Cart",
+        "Cart.count",
+        "Cart.{first,last}",
+    ]
+
+
+@pytest.mark.parametrize("path", ["checkout.jsx", "checkout.tsx"])
+def test_a_hook_inside_a_component_is_addressable(path):
+    target = ts.resolve(COMPONENT, only(path, COMPONENT))
+    assert (target.qualname, target.start, target.end) == ("Checkout.onPay", 5, 7)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["{first,last}", "{ first, last }", "{\n    first,\n    last,\n  }"],
+)
+def test_a_destructuring_qualname_survives_reformatting(pattern):
+    """Prettier's bracket spacing and wrapping must not move the target."""
+    src = COMPONENT.replace("{ first, last }", pattern)
+    spec = ts.spec_for("checkout.jsx")
+    names = [name for name, _ in ts._definitions(ts._parse(spec, src).root_node, spec)]
+    assert "Cart.{first,last}" in names
+
+
+STORE = """export class Store {
+  // keystone: handle
+  handle = () => {
+    const inside = 2;
+    return inside;
+  };
+  static count = 0;
+  #secret = 1;
+  method() {
+    const local = 3;
+  }
+}
+"""
+
+
+@pytest.mark.parametrize("path", ["store.js", "store.ts", "store.tsx"])
+def test_a_class_field_is_a_definition(path):
+    spec = ts.spec_for(path)
+    names = [
+        name for name, _ in ts._definitions(ts._parse(spec, STORE).root_node, spec)
+    ]
+    assert names == [
+        "Store",
+        "Store.handle",
+        "Store.handle.inside",
+        "Store.count",
+        "Store.#secret",
+        "Store.method",
+        "Store.method.local",
+    ]
+    assert ts.resolve(STORE, only(path, STORE)).qualname == "Store.handle"
+
+
+@pytest.mark.parametrize("path", ["store.js", "store.ts", "store.tsx"])
+def test_a_class_field_keystone_end_to_end(repo, run_cli, capsys, path):
+    (repo / path).write_text(STORE.replace("  // keystone: handle\n", ""))
+    assert run_cli("add", f"{path}::Store.handle", "--id", "handle", "-m", "Why.") == 0
+    assert run_cli("check", "--all", "--no-base") == 0, capsys.readouterr().err
+    (repo / path).write_text((repo / path).read_text().replace("= 2", "= 3"))
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "[C3] keystone 'handle' changed" in capsys.readouterr().err
+
+
+ONE_LINERS = {
+    "method": "class A {\n  // keystone: k\n  foo() { const x = 1; return x; }\n}\n",
+    "field": "class A {\n  // keystone: k\n  go = () => { const x = 1; return x }\n}\n",
+    "function": "// keystone: k\nfunction f() { const x = 1; return x; }\n",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ONE_LINERS))
+@pytest.mark.parametrize("path", ["a.js", "a.ts"])
+def test_a_one_line_body_with_a_local_rehashes_to_itself(path, shape):
+    """A local on the first line is not the definition the fragment stores."""
+    src = ONE_LINERS[shape]
+    target = ts.resolve(src, only(path, src))
+    stored = ts.canonical_source(src, target)
+    assert ts.hash_stored_source(stored, str(target)) == ts.hashes(src, target)[0]

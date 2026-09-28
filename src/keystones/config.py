@@ -10,6 +10,38 @@ from pathlib import Path, PurePosixPath
 from keystones.preprocess import Refused
 
 DEFAULT_EXCLUDE_DIRS = (".git", "node_modules", "vendor", "generated")
+# Generated files that churn on every dependency bump and never carry a marker.
+# `include` in [tool.keystones] opts one back in.
+DEFAULT_EXCLUDE_FILES = (
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "bun.lockb",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "pdm.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "go.sum",
+    "flake.lock",
+    "packages.lock.json",
+)
+DEFAULT_EXCLUDE_SUFFIXES = (".min.js", ".min.css", ".map")
+
+
+def default_excluded(rel_path: str, include: tuple[str, ...] = ()) -> bool:
+    """The built-in excludes: directories, generated files and minified assets."""
+    parts = PurePosixPath(rel_path).parts
+    if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        return True
+    name = parts[-1] if parts else ""
+    generated = name in DEFAULT_EXCLUDE_FILES or name.endswith(DEFAULT_EXCLUDE_SUFFIXES)
+    return generated and _matches(rel_path, include) is None
+
 
 # What a builtin spec fixes; a table may only take one whole or declare its own.
 SPEC_SHAPE_KEYS = frozenset(
@@ -105,6 +137,14 @@ class Config:
     exclude: tuple[str, ...] = ()
     categories: tuple[str, ...] = ("default",)
     languages: tuple[LanguageConfig, ...] = ()
+    # Let a ruleset's required_reviewers stand in for CODEOWNERS in C8.
+    codeowners_from_rulesets: bool = False
+    # Added to the built-in pytest and unittest ones. See C16.
+    disabling_decorators: tuple[str, ...] = ()
+    # Paths a bot rewrites with no pull request, where no gate can hold. See C18.
+    unreviewed: tuple[str, ...] = ()
+    # Generated files to scan after all, by pattern; overrides the built-in list.
+    include: tuple[str, ...] = ()
 
     @property
     def sidecar_root(self) -> Path:
@@ -121,16 +161,24 @@ class Config:
         return self.sidecar_root / "INDEX.md"
 
     def is_excluded(self, rel_path: str) -> bool:
-        parts = PurePosixPath(rel_path).parts
-        if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        if default_excluded(rel_path, self.include):
             return True
-        # fnmatch does not match `x/y` against `**/x/y`, and users write the
-        # `**/` form expecting it to cover the repo root as well.
-        return any(
-            fnmatch(rel_path, pat)
-            or (pat.startswith("**/") and fnmatch(rel_path, pat[3:]))
-            for pat in self.exclude
-        )
+        return _matches(rel_path, self.exclude) is not None
+
+    def unreviewed_by(self, rel_path: str) -> str | None:
+        """The `unreviewed` pattern covering this path, if one does."""
+        return _matches(rel_path, self.unreviewed)
+
+
+def _matches(rel_path: str, patterns: tuple[str, ...]) -> str | None:
+    # fnmatch does not match `x/y` against `**/x/y`, and users write the
+    # `**/` form expecting it to cover the repo root as well.
+    for pat in patterns:
+        if fnmatch(rel_path, pat) or (
+            pat.startswith("**/") and fnmatch(rel_path, pat[3:])
+        ):
+            return pat
+    return None
 
 
 class ConfigError(Exception):
@@ -186,6 +234,12 @@ def options_digest(*option_sets: tuple[tuple[str, object], ...]) -> str:
         ",".join(f"{k}={v!r}" for k, v in options) for options in option_sets
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _structured_extensions() -> tuple[str, ...]:
+    from keystones.adapters import structured
+
+    return structured.extensions
 
 
 def _builtin_specs() -> dict[str, object]:
@@ -393,6 +447,8 @@ def _language(table: dict, index: int, claimed: dict[str, str]) -> LanguageConfi
             raise ConfigError(f"{where}: hash must be a string")
         offered = preprocessor.name if preprocessor else named
         available = {"text"} | ({offered} if offered else set())
+        if named is None and all(ext in _structured_extensions() for ext in extensions):
+            available.add("yaml")
         if default_hash not in available:
             raise ConfigError(
                 f"{where}: hash '{default_hash}' is not a basis this table "
@@ -440,6 +496,24 @@ def load(repo_root: Path | None = None) -> Config:
     if data is None:
         raise ConfigError("no [tool.keystones] section in pyproject.toml")
     categories = tuple(data.get("categories", ["default"]))
+    from_rulesets = data.get("codeowners_from_rulesets", False)
+    if not isinstance(from_rulesets, bool):
+        raise ConfigError(
+            "tool.keystones.codeowners_from_rulesets must be true or false"
+        )
+    disabling = data.get("disabling_decorators", [])
+    if not isinstance(disabling, list) or not all(
+        isinstance(d, str) and d for d in disabling
+    ):
+        raise ConfigError(
+            "tool.keystones.disabling_decorators must be a list of dotted names"
+        )
+    for key in ("unreviewed", "include"):
+        value = data.get(key, [])
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v for v in value
+        ):
+            raise ConfigError(f"tool.keystones.{key} must be a list of path patterns")
     if "default" not in categories:
         categories = ("default", *categories)
     return Config(
@@ -448,4 +522,8 @@ def load(repo_root: Path | None = None) -> Config:
         exclude=tuple(data.get("exclude", [])),
         categories=categories,
         languages=_languages(data),
+        codeowners_from_rulesets=from_rulesets,
+        disabling_decorators=tuple(disabling),
+        unreviewed=tuple(data.get("unreviewed", [])),
+        include=tuple(data.get("include", [])),
     )

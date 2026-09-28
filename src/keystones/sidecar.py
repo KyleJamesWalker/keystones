@@ -90,6 +90,8 @@ def parse(path: Path, category: str) -> Entry:
         review_every=meta.get("review_every"),
         depends=list(meta.get("depends", [])),
         depends_hash=meta.get("depends_hash", ""),
+        disabled_by=list(meta.get("disabled_by", [])),
+        twins=list(meta.get("twins", [])),
         why=why,
         source=source,
         source_lang=source_lang,
@@ -122,6 +124,10 @@ def render(entry: Entry) -> str:
     if entry.depends:
         meta["depends"] = entry.depends
         meta["depends_hash"] = entry.depends_hash
+    if entry.disabled_by:
+        meta["disabled_by"] = entry.disabled_by
+    if entry.twins:
+        meta["twins"] = entry.twins
 
     lines = [f"# {entry.id}", "", "```toml"]
     lines += [f"{key} = {_toml_value(value)}" for key, value in meta.items()]

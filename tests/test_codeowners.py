@@ -92,3 +92,96 @@ def test_c8_fails_when_the_gate_config_is_unowned(repo, run_cli):
         "/keystones/          @org/eng\n/.github/CODEOWNERS  @org/eng\n"
     )
     assert run_cli("check", "--all", "--no-base") == 1
+
+
+def _rulesets(repo, monkeypatch, patterns, *, on=True):
+    from keystones import doctor
+
+    if on:
+        pyproject = repo / "pyproject.toml"
+        pyproject.write_text(
+            pyproject.read_text() + "codeowners_from_rulesets = true\n"
+        )
+    rule = doctor.RequiredReviewers(
+        tuple(patterns), 1, "Team 42", "ruleset 'owners' (organization acme)"
+    )
+    monkeypatch.setattr(doctor, "required_reviewers", lambda root: [rule])
+
+
+def test_c8_ignores_rulesets_unless_the_repo_opts_in(repo, run_cli, monkeypatch):
+    (repo / ".github" / "CODEOWNERS").unlink()
+    _rulesets(repo, monkeypatch, ["**"], on=False)
+    assert run_cli("check", "--all", "--no-base") == 1
+
+
+def test_c8_accepts_a_ruleset_that_covers_the_gate(repo, run_cli, monkeypatch, capsys):
+    (repo / ".github" / "CODEOWNERS").unlink()
+    _rulesets(repo, monkeypatch, ["keystones/**", "pyproject.toml"])
+    assert run_cli("check", "--all", "--no-base") == 0
+    err = capsys.readouterr().err
+    assert "notice: [C8] category 'finance' (keystones/finance/) is owned by " in err
+    assert "ruleset 'owners' (organization acme)" in err
+
+
+def test_c8_still_fails_what_the_ruleset_does_not_cover(
+    repo, run_cli, monkeypatch, capsys
+):
+    (repo / ".github" / "CODEOWNERS").unlink()
+    _rulesets(repo, monkeypatch, ["keystones/finance/*"])
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "category 'default' has no CODEOWNERS owner" in err
+    assert "pyproject.toml is part of the gate" in err
+
+
+def test_c8_falls_back_to_codeowners_when_rules_cannot_be_read(
+    repo, run_cli, monkeypatch, capsys
+):
+    from keystones import doctor
+
+    _rulesets(repo, monkeypatch, [])
+
+    def unreadable(root):
+        raise doctor.Unavailable("no GH_TOKEN or GITHUB_TOKEN in the environment")
+
+    monkeypatch.setattr(doctor, "required_reviewers", unreadable)
+    (repo / ".github" / "CODEOWNERS").unlink()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "warning: [C8] codeowners_from_rulesets is on" in err
+    assert "only CODEOWNERS was checked" in err
+    assert "error: [C8] no CODEOWNERS file" in err
+
+
+def test_codeowners_from_rulesets_must_be_a_boolean(repo, run_cli):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + 'codeowners_from_rulesets = "yes"\n')
+    assert run_cli("check", "--all", "--no-base") == 2
+
+
+def test_a_ruleset_pattern_is_matched_by_path_segment():
+    from keystones.doctor import RequiredReviewers
+
+    rule = RequiredReviewers(("keystones/*",), 1, "Team 1", "r")
+    assert rule.covering("keystones/INDEX.md") == "keystones/*"
+    assert rule.covering("keystones/finance/x.md") is None
+    assert (
+        RequiredReviewers(("keystones/**",), 0, "Team 1", "r").covering(
+            "keystones/finance/x.md"
+        )
+        is None
+    )
+
+
+def test_c8_reads_rulesets_only_when_codeowners_leaves_a_gap(
+    repo, run_cli, monkeypatch
+):
+    from keystones import doctor
+
+    _rulesets(repo, monkeypatch, ["**"])
+
+    def never(root):
+        raise AssertionError("C8 called the GitHub API with nothing to cover")
+
+    monkeypatch.setattr(doctor, "required_reviewers", never)
+    assert run_cli("check", "--all", "--no-base") == 0

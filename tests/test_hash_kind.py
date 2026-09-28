@@ -68,7 +68,11 @@ def test_kinds_for_a_parsed_extension_offer_text_too():
 
 
 def test_kinds_for_an_unparsed_extension_are_text_only():
-    assert adapters.kinds_for("net.yaml") == ("text",)
+    assert adapters.kinds_for("app.conf") == ("text",)
+
+
+def test_kinds_for_yaml_start_with_text():
+    assert adapters.kinds_for("net.yaml")[0] == "text"
 
 
 @needs_extra
@@ -95,7 +99,7 @@ def _entry(**over) -> Entry:
         category="finance",
         target="m.sql#L2-L3",
         hash="text",
-        hasher="keystones-text/1",
+        hasher="keystones-text/2",
         semantic="sha256:a",
         text="sha256:a",
     )
@@ -158,7 +162,7 @@ def test_an_unreadable_file_with_hash_text_just_works(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
     sidecar = (repo / "keystones" / "finance" / "rev-rec.md").read_text()
     assert 'hash = "text"' in sidecar
-    assert 'hasher = "keystones-text/1"' in sidecar
+    assert 'hasher = "keystones-text/2"' in sidecar
 
 
 @needs_extra
