@@ -33,7 +33,7 @@ def resolve(repo_root: Path, spec: str, kind: str | None) -> tuple[object, Targe
     if adapters.needs_extra(rel):
         raise UnresolvedTwin(spec, f"{rel} needs a parser that is not installed")
     try:
-        adapter = adapters.for_kind(rel, kind) if kind else adapters.for_path(rel)
+        adapter = adapters.for_kind(rel, kind) if kind else adapters.for_symbols(rel)
     except adapters.UnknownKind as exc:
         raise UnresolvedTwin(spec, str(exc)) from exc
     src = path.read_text()

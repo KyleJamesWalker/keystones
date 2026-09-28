@@ -123,3 +123,29 @@ def test_a_whole_file_twin(repo, run_cli):
     assert run_cli("check", "--all", "--no-base") == 0
     (repo / "b.txt").write_text("value = 2\n")
     assert run_cli("check", "--all", "--no-base") == 1
+
+
+def test_a_twin_with_no_recorded_basis_uses_the_symbol_adapter(repo):
+    """An entry written before a basis was recorded has hash = ''. Its twins
+    must still resolve through an adapter that can name symbols."""
+    from keystones import twins
+    from keystones.adapters import python as python_adapter
+
+    (repo / "copy.py").write_text("def compute_payout():\n    return 1\n")
+    adapter, target, _ = twins.resolve(repo, "copy.py::compute_payout", None)
+    assert adapter is python_adapter
+    assert target.qualname == "compute_payout"
+
+
+def test_a_yaml_twin_with_no_recorded_basis_is_found(repo):
+    import pytest
+
+    from keystones import twins
+    from keystones.adapters import structured
+
+    if not structured.available():
+        pytest.skip("needs PyYAML")
+    (repo / "v.yaml").write_text("spec:\n  replicas: 3\n")
+    adapter, target, _ = twins.resolve(repo, "v.yaml::spec.replicas", None)
+    assert adapter is structured
+    assert target.qualname == "spec.replicas"
