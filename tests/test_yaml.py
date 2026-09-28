@@ -288,3 +288,20 @@ def test_two_items_with_the_same_name_are_refused(repo, run_cli, capsys):
     pyproject.write_text(pyproject.read_text() + YAML_TABLE)
     assert run_cli("add", "--id", "second", "-m", "why.") == 1
     assert "more than once" in capsys.readouterr().err
+
+
+@needs_yaml
+def test_a_yaml_region_records_the_yaml_hasher(values, run_cli):
+    """The YAML adapter hashes its own regions, so the text hasher id would
+    be a lie about what produced the hash."""
+    edit(
+        values,
+        "  # keystone: replicas\n  replicas: 3\n  ports: [80, 443]\n",
+        "  # keystone:start: capacity\n  replicas: 3\n  ports: [80, 443]\n"
+        "  # keystone:end\n",
+    )
+    assert run_cli("add", "--id", "capacity", "-m", "Capacity.") == 0
+    sidecar = (values / "keystones" / "default" / "capacity.md").read_text()
+    assert 'hash = "yaml"' in sidecar
+    assert "keystones-yaml/1+pyyaml@" in sidecar
+    assert run_cli("check", "--all", "--no-base") == 0

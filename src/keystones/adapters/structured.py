@@ -24,6 +24,8 @@ from keystones.models import Marker, Scope, Target
 name = "yaml"
 extensions = (".yaml", ".yml")
 KIND = "yaml"
+# Regions parse on their own here, so they are not handed to the text adapter.
+hashes_regions = True
 SERIALIZER_VERSION = 1
 
 

@@ -270,7 +270,7 @@ def cmd_fix(args, cfg: Config) -> int:
         entry.target = target_str
         entry.semantic = semantic
         entry.text = text
-        entry.hash = item.adapter.kind_for_path(item.marker.path)
+        entry.hash = adapters.kind_for(item.adapter, item.target)
         entry.hasher = adapters.hasher_id(item.adapter, item.target)
         entry.source = item.adapter.canonical_source(src, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
@@ -410,7 +410,7 @@ def _adopt(args, cfg: Config) -> int:
         id=keystone_id,
         category=category,
         target=str(item.target),
-        hash=item.adapter.kind_for_path(item.marker.path),
+        hash=adapters.kind_for(item.adapter, item.target),
         hasher=adapters.hasher_id(item.adapter, item.target),
         semantic=semantic,
         text=text_digest,
@@ -732,7 +732,7 @@ def cmd_add(args, cfg: Config) -> int:
         id=args.id,
         category=args.category,
         target=str(new_target),
-        hash=adapter.kind_for_path(rel),
+        hash=adapters.kind_for(adapter, new_target),
         hasher=adapters.hasher_id(adapter, new_target),
         semantic=semantic,
         text=text,

@@ -47,7 +47,7 @@ def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Ou
         kind_moved = (
             item is not None
             and bool(entry.hash)
-            and entry.hash != item.adapter.kind_for_path(item.marker.path)
+            and entry.hash != adapters.kind_for(item.adapter, item.target)
         )
         adapter = item.adapter if kind_moved else adapters.for_entry(entry)
         expected = adapters.hasher_id(adapter, entry.target)
@@ -105,7 +105,7 @@ def apply(cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]) -> int
         live = (cfg.repo_root / item.marker.path).read_text()
         semantic, text = item.adapter.hashes(live, item.target)
         entry.hasher = outcome.new_hasher
-        entry.hash = item.adapter.kind_for_path(item.marker.path)
+        entry.hash = adapters.kind_for(item.adapter, item.target)
         entry.semantic = semantic
         entry.text = text
         entry.target = str(item.target)

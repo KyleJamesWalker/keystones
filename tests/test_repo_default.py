@@ -90,11 +90,11 @@ select order_id, amount * 0.97 as net from orders;
 def test_removing_the_default_is_caught_not_silent(repo, run_cli, capsys):
     """A config edit re-gates every entry under it; C14 is what notices.
 
-    A region hashes identically either way - tree-sitter delegates regions to
-    the text adapter - so the recorded kind is the only thing that differs.
+    A whole-file keystone, because a region is text under either default
+    and so records `text` both times.
     """
     configure(repo, TEXT_DEFAULT)
-    (repo / "v.sql").write_text(REGION_SQL)
+    (repo / "v.sql").write_text("-- keystone(file): rev-rec\nselect 1 as x\n")
     assert run_cli("add", "--id", "rev-rec", "-m", "Rev rec.") == 0
     configure(repo, "")
     assert run_cli("check", "--all", "--no-base") == 1

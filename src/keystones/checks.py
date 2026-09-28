@@ -112,7 +112,7 @@ def c3_c4_hashes(
             continue
         # The basis is recorded in two places on purpose, so editing one and
         # not the other is caught instead of quietly re-gating the keystone.
-        actual_kind = item.adapter.kind_for_path(item.marker.path)
+        actual_kind = adapters.kind_for(item.adapter, item.target)
         if entry.hash and entry.hash != actual_kind:
             out.append(
                 Finding(
