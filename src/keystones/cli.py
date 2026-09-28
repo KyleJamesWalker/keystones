@@ -295,7 +295,23 @@ def cmd_fix(args, cfg: Config) -> int:
             or depends_hash != stored_depends
             or disabled_by != sorted(entry.disabled_by)
         )
-        if not semantic_changed and text == entry.text and target_str == entry.target:
+        # A twin that no longer matches is not reconciled by writing: it needs
+        # the copies brought back in line, or the twin taken off the list.
+        problem = _twins_mismatch(
+            cfg, entry.twins, item.adapter, item.marker.path, semantic
+        )
+        if problem:
+            print(f"keystones: '{entry.id}': {problem}", file=sys.stderr)
+            failed = True
+            continue
+        source = item.adapter.canonical_source(src, item.target)
+        unchanged = (
+            not semantic_changed
+            and text == entry.text
+            and target_str == entry.target
+            and source == entry.source
+        )
+        if unchanged:
             continue
         if semantic_changed and not args.message:
             print(
@@ -319,12 +335,14 @@ def cmd_fix(args, cfg: Config) -> int:
             entry.history.insert(0, f"{today} - moved to {target_str}. {author}")
         elif args.message:
             entry.history.insert(0, f"{today} - {args.message} {author}")
+        elif not semantic_changed and text == entry.text and source != entry.source:
+            entry.history.insert(0, f"{today} - stored source refreshed. {author}")
         entry.target = target_str
         entry.semantic = semantic
         entry.text = text
         entry.hash = adapters.kind_for(item.adapter, item.target)
         entry.hasher = adapters.hasher_id(item.adapter, item.target)
-        entry.source = item.adapter.canonical_source(src, item.target)
+        entry.source = source
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
         entry.disabled_by = disabled_by
         sidecar.write(cfg.sidecar_path(entry.category, entry.id), entry)
@@ -883,14 +901,21 @@ def cmd_migrate(args, cfg: Config) -> int:
 
     migrated = migrate_mod.apply(cfg, resolved, outcomes)
     _write_index(cfg)
-    print(f"\nkeystones: migrated {migrated} entr(ies)")
+    print(f"\nkeystones: migrated {len(migrated)} entr(ies)")
+    # A twin that matched only under the old hasher is not provable across;
+    # it is named here rather than left for the next check to find.
+    from keystones import twins
+
+    unreconciled = twins.check(cfg.repo_root, [e for e in migrated if e.twins])
+    for finding in unreconciled:
+        print(f"keystones: needs review: {finding.message}", file=sys.stderr)
     if blocked:
         print(
             f"keystones: {len(blocked)} left alone; the code changed too, so they need "
             '`keystones fix -m "<why>"` and their owner',
         )
         return 1
-    return 0
+    return 1 if unreconciled else 0
 
 
 def cmd_list(args, cfg: Config) -> int:

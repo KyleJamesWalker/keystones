@@ -399,3 +399,17 @@ def test_an_explicit_selector_may_use_any_scalar_key(repo, run_cli):
         in (repo / "keystones" / "default" / "y.md").read_text()
     )
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_yaml
+def test_fix_refreshes_the_stored_source_when_only_its_text_moved(
+    gated, run_cli, capsys
+):
+    """Hashes equal, so nothing to review, but the sidecar should show the
+    code as it is now written."""
+    edit(gated, "  replicas: 3", "  replicas:    3")
+    assert check(run_cli, capsys)[0] == 0
+    assert run_cli("fix") == 0
+    sidecar = (gated / SIDECAR).read_text()
+    assert "replicas:    3" in sidecar
+    assert "stored source refreshed" in sidecar

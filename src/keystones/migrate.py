@@ -93,10 +93,13 @@ def plan(cfg: Config, resolved: list[Resolved], entries: list[Entry]) -> list[Ou
     return outcomes
 
 
-def apply(cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]) -> int:
+def apply(
+    cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]
+) -> list[Entry]:
+    """Rewrite every proved entry; returns the entries written."""
     from keystones import dependencies, sidecar
 
-    migrated = 0
+    migrated: list[Entry] = []
     for outcome in outcomes:
         if not outcome.proved:
             continue
@@ -112,5 +115,5 @@ def apply(cfg: Config, resolved: list[Resolved], outcomes: list[Outcome]) -> int
         entry.source = item.adapter.canonical_source(live, item.target)
         entry.depends_hash = dependencies.combined_hash(cfg.repo_root, entry.depends)
         sidecar.write(Path(entry.path), entry)
-        migrated += 1
+        migrated.append(entry)
     return migrated
