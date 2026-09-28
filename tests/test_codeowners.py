@@ -134,6 +134,23 @@ def test_c8_still_fails_what_the_ruleset_does_not_cover(
     assert "pyproject.toml is part of the gate" in err
 
 
+def test_c8_says_which_rulesets_it_read_when_none_covers(
+    repo, run_cli, monkeypatch, capsys
+):
+    from keystones import doctor
+
+    _rulesets(repo, monkeypatch, [])
+    monkeypatch.setattr(doctor, "required_reviewers", lambda root: [])
+    monkeypatch.setattr(
+        doctor, "rulesets_applying", lambda root: ["ruleset 'main' (organization acme)"]
+    )
+    (repo / ".github" / "CODEOWNERS").unlink()
+    assert run_cli("check", "--all", "--no-base") == 1
+    err = capsys.readouterr().err
+    assert "read 1 ruleset(s): ruleset 'main' (organization acme)" in err
+    assert "none has a required_reviewers pattern" in err
+
+
 def test_c8_falls_back_to_codeowners_when_rules_cannot_be_read(
     repo, run_cli, monkeypatch, capsys
 ):

@@ -872,7 +872,9 @@ def cmd_doctor(args, cfg: Config) -> int:
             if cfg.codeowners_from_rulesets
             else None
         )
-        report = doctor.audit(cfg.repo_root, args.required_check, sidecar_paths)
+        report = doctor.audit(
+            cfg.repo_root, args.required_check, sidecar_paths, args.repo
+        )
     except doctor.Unavailable as exc:
         print(f"keystones doctor: skipped, {exc}", file=sys.stderr)
         return 0
@@ -1052,6 +1054,10 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="verify branch protection actually enforces review"
     )
     doc.add_argument("--required-check", default="keystones")
+    doc.add_argument(
+        "--repo",
+        help="owner/name when there is no origin remote; GITHUB_REPOSITORY too",
+    )
     doc.add_argument("--format", choices=("plain", "github"), default=None)
     doc.set_defaults(func=cmd_doctor)
 

@@ -628,7 +628,23 @@ def _ruleset_reviewers(cfg: Config) -> tuple[list, list[Finding]]:
     if not cfg.codeowners_from_rulesets:
         return [], []
     try:
-        return doctor.required_reviewers(cfg.repo_root), []
+        rules = doctor.required_reviewers(cfg.repo_root)
+        if rules:
+            return rules, []
+        try:
+            labels = doctor.rulesets_applying(cfg.repo_root)
+        except doctor.Unavailable:
+            labels = []
+        return [], [
+            Finding(
+                "C8",
+                Severity.NOTICE,
+                f"codeowners_from_rulesets is on: read {len(labels)} ruleset(s)"
+                + (": " + ", ".join(labels) if labels else "")
+                + f"; none has a required_reviewers pattern covering "
+                f"{cfg.root}/<category>/, so CODEOWNERS alone decides",
+            )
+        ]
     except doctor.Unavailable as exc:
         return [], [
             Finding(

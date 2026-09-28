@@ -42,8 +42,17 @@ def api(monkeypatch):
 
     monkeypatch.setattr(doctor, "_get", fake_get)
     monkeypatch.setattr(doctor, "_token", lambda: "t")
-    monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
+    monkeypatch.setattr(doctor, "slug", lambda root, repo=None: ("o", "r"))
     return state
+
+
+@pytest.fixture(autouse=True)
+def codeowners_file(request, tmp_path):
+    """Code owner review means nothing without a CODEOWNERS file."""
+    if "repo" in request.fixturenames:
+        return  # the repo fixture writes its own
+    (tmp_path / ".github").mkdir(exist_ok=True)
+    (tmp_path / ".github" / "CODEOWNERS").write_text("/keystones/ @org/eng\n")
 
 
 def errors(findings):
@@ -127,7 +136,7 @@ def fake_gh(monkeypatch, stdout="", error=None):
 @pytest.mark.parametrize("error", [None, FileNotFoundError("gh")])
 def test_no_token_is_a_skip_not_a_failure(tmp_path, monkeypatch, error):
     fake_gh(monkeypatch, error=error)
-    monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
+    monkeypatch.setattr(doctor, "slug", lambda root, repo=None: ("o", "r"))
     with pytest.raises(doctor.Unavailable, match="gh auth token"):
         doctor.run(tmp_path)
 
@@ -378,3 +387,26 @@ def test_the_cli_lists_every_applying_ruleset(repo, run_cli, api, capsys):
     out = capsys.readouterr().out
     assert "ruleset 'protect-main' (organization acme) requires:" in out
     assert doctor.CHECK in out
+
+
+# --- where the repo comes from, and what code owner review needs -------------
+
+
+def test_repo_may_be_given_or_read_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    assert doctor.slug(tmp_path, "acme/widgets") == ("acme", "widgets")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/gadgets")
+    assert doctor.slug(tmp_path) == ("acme", "gadgets")
+
+
+def test_a_remoteless_clone_without_a_repo_is_a_skip(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    with pytest.raises(doctor.Unavailable, match="--repo"):
+        doctor.slug(tmp_path)
+
+
+def test_code_owner_review_needs_a_codeowners_file(tmp_path, api):
+    (tmp_path / ".github" / "CODEOWNERS").unlink()
+    report = doctor.audit(tmp_path)
+    assert doctor.CODE_OWNER not in report.satisfied
+    assert any("no CODEOWNERS file" in f.message for f in errors(report.findings))

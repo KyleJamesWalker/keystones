@@ -345,7 +345,7 @@ def test_doctor_reports_an_unusable_token_rather_than_passing(tmp_path, monkeypa
     from keystones.models import Severity
 
     monkeypatch.setattr(doctor, "_token", lambda: "t")
-    monkeypatch.setattr(doctor, "slug", lambda root: ("o", "r"))
+    monkeypatch.setattr(doctor, "slug", lambda root, repo=None: ("o", "r"))
     monkeypatch.setattr(
         doctor,
         "_get",
