@@ -232,7 +232,10 @@ def test_an_alias_on_the_function_itself_is_c16_when_flipped(guarded, run_cli, c
     status, err = check(run_cli, capsys)
     assert status == 1
     assert "[C16]" in err
-    assert "pytest.mark.skipif(True) via off on TestRounding.test_guard" in err
+    assert (
+        "decorator alias off changed: pytest.mark.skipif(False) -> "
+        "pytest.mark.skipif(True)"
+    ) in err
 
 
 def test_ast_warnings_in_a_keystoned_file_stay_quiet(repo, run_cli, recwarn):
