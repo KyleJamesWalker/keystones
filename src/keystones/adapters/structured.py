@@ -262,8 +262,9 @@ def hash_stored_source(source: str, target: str) -> str:
         docs = list(_yaml().safe_load_all(source))
         return digest(canonical(docs[0] if len(docs) == 1 else docs))
     # A stored node slice is `key: value` or `- item`, so the value is the one
-    # entry of what it loads as.
-    loaded = _yaml().safe_load(textwrap.dedent(source))
+    # entry of what it loads as. The slice lost its final newline, which a
+    # clip-chomped block scalar keeps, so it goes back on before loading.
+    loaded = _yaml().safe_load(textwrap.dedent(source) + "\n")
     if isinstance(loaded, dict) and len(loaded) == 1:
         return digest(canonical(next(iter(loaded.values()))))
     if isinstance(loaded, list) and len(loaded) == 1:

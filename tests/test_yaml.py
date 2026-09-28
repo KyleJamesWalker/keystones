@@ -305,3 +305,16 @@ def test_a_yaml_region_records_the_yaml_hasher(values, run_cli):
     assert 'hash = "yaml"' in sidecar
     assert "keystones-yaml/1+pyyaml@" in sidecar
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_yaml
+@pytest.mark.parametrize("style", ["|", "|-", ">"])
+def test_a_block_scalar_node_passes_c5_right_after_add(repo, run_cli, capsys, style):
+    """The stored slice is joined without its final newline, which clip
+    chomping keeps, so the re-parsed value must not lose it."""
+    (repo / "b.yaml").write_text(
+        f"top:\n  # keystone(hash=yaml): spec\n  spec: {style}\n    - a: 1\n"
+        "  other: x\n"
+    )
+    assert run_cli("add", "--id", "spec", "-m", "why.") == 0
+    assert check(run_cli, capsys) == (0, "")
