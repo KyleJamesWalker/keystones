@@ -319,8 +319,9 @@ def _marks(body: list[ast.stmt]) -> list[ast.AST]:
 def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]:
     """Every decorator or mark that switches this definition off, and from where.
 
-    Only the definition's own decorators are inside its hash. One on an
-    enclosing class, or a `pytestmark`, disables it without moving a byte of it.
+    The definition's own decorators are inside its hash, so they are C3's and
+    left out here. One on an enclosing class, or a `pytestmark`, disables it
+    without moving a byte of it.
     """
     tree = ast.parse(src)
     defs = dict(_definitions(tree))
@@ -341,7 +342,6 @@ def disablers(src: str, qualname: str, extra: tuple[str, ...] = ()) -> list[str]
             if any(name == w or name.endswith(f".{w}") for w in wanted):
                 found.append(f"{name} on {where}")
 
-    scan(node.decorator_list, qualname)
     parts = qualname.split(".")
     for depth in range(len(parts) - 1, 0, -1):
         prefix = ".".join(parts[:depth])

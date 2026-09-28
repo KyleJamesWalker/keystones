@@ -128,3 +128,12 @@ def test_disabling_decorators_must_be_a_list_of_names(repo, run_cli):
     pyproject = repo / "pyproject.toml"
     pyproject.write_text(pyproject.read_text() + 'disabling_decorators = "flaky"\n')
     assert run_cli("check", "--all", "--no-base") == 2
+
+
+def test_a_skip_on_the_function_itself_is_c3_alone(guarded, run_cli, capsys):
+    """Its own decorators are inside the hash, so C3 already says it changed."""
+    edit(guarded, "    def test_guard", "    @pytest.mark.skip\n    def test_guard")
+    status, err = check(run_cli, capsys)
+    assert status == 1
+    assert "[C3]" in err
+    assert "[C16]" not in err
