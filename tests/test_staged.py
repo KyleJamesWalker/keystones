@@ -172,3 +172,9 @@ def test_a_staged_file_that_is_someone_elses_dependency_is_checked(
     capsys.readouterr()
     assert run_cli("check", "rates.py") == 1
     assert "[C11]" in capsys.readouterr().err
+
+
+def test_a_path_that_does_not_exist_is_an_error(gated, run_cli, capsys):
+    """A typo in a hook's file list must not pass as clean."""
+    assert run_cli("check", "nope.py") == 1
+    assert "nope.py" in capsys.readouterr().err

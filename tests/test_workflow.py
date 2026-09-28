@@ -150,3 +150,12 @@ def test_a_syntax_error_in_a_keystoned_file_is_its_own_finding(repo, run_cli, ca
     capsys.readouterr()
     assert run_cli("check", "billing/payout.py") == 1
     assert "[parse]" in capsys.readouterr().err
+
+
+def test_history_separates_the_note_from_the_author(repo, run_cli):
+    add_keystone(run_cli)
+    edit(repo, "ROUND_HALF_UP", "ROUND_HALF_EVEN")
+    assert run_cli("fix", "-m", "banker rounding per policy.") == 0
+    text = (repo / "keystones" / "finance" / "payout-rounding.md").read_text()
+    assert "- banker rounding per policy. (Test User)" in text
+    assert "initial keystone (Test User)" in text

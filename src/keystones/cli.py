@@ -105,6 +105,11 @@ def _check_paths(args, cfg: Config, paths: list[str]) -> int:
     )
 
     staged, findings = _staged_entries(cfg, paths)
+    for rel in paths:
+        if not (cfg.repo_root / rel).exists():
+            findings.append(
+                Finding("path", Severity.ERROR, f"{rel} does not exist", rel)
+            )
     targets = {entry.target.split("::")[0].split("#")[0] for entry in staged.values()}
     resolved, found, skipped = collect(cfg, sorted({*paths, *targets}))
     findings += found
@@ -246,13 +251,13 @@ def _extend(args, cfg: Config, item, category: str, keystone_id: str, twins, dep
     if new_twins:
         entry.twins += new_twins
         entry.history.insert(
-            0, f"{today} - twin added: {', '.join(new_twins)}. {author}"
+            0, f"{today} - twin added: {', '.join(new_twins)}. ({author})"
         )
     if new_depends:
         entry.depends += new_depends
         entry.depends_hash = depends_hash
         entry.history.insert(
-            0, f"{today} - depends added: {', '.join(new_depends)}. {author}"
+            0, f"{today} - depends added: {', '.join(new_depends)}. ({author})"
         )
     sidecar.write(path, entry)
     print(f"keystones: extended '{keystone_id}' in {category}")
@@ -397,11 +402,11 @@ def cmd_fix(args, cfg: Config) -> int:
             )
             return 1
         if target_str != entry.target and not semantic_changed and not args.message:
-            entry.history.insert(0, f"{today} - moved to {target_str}. {author}")
+            entry.history.insert(0, f"{today} - moved to {target_str}. ({author})")
         elif args.message:
-            entry.history.insert(0, f"{today} - {args.message} {author}")
+            entry.history.insert(0, f"{today} - {args.message} ({author})")
         elif not semantic_changed and text == entry.text and source != entry.source:
-            entry.history.insert(0, f"{today} - stored source refreshed. {author}")
+            entry.history.insert(0, f"{today} - stored source refreshed. ({author})")
         entry.target = target_str
         entry.semantic = semantic
         entry.text = text
@@ -579,8 +584,8 @@ def _adopt(args, cfg: Config) -> int:
         source=item.adapter.canonical_source(src, item.target),
         source_lang=_lang_for(item.marker.path),
         history=[
-            f"{datetime.date.today().isoformat()} - initial keystone. "
-            f"{_git_author(cfg.repo_root)}"
+            f"{datetime.date.today().isoformat()} - initial keystone "
+            f"({_git_author(cfg.repo_root)})"
         ],
     )
     sidecar.write(cfg.sidecar_path(category, keystone_id), entry)
@@ -811,7 +816,14 @@ def cmd_add(args, cfg: Config) -> int:
         print(f"keystones: {exc}", file=sys.stderr)
         return 1
     if scope is Scope.FILE:
-        target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
+        try:
+            target = adapter.resolve(src, Marker(args.id, args.category, scope, rel, 1))
+        except ResolutionError as exc:
+            print(
+                f"keystones: {exc} Gate it on text instead: --hash text",
+                file=sys.stderr,
+            )
+            return 1
         insert_at, indent = _file_scope_insert_line(src), ""
     else:
         try:
@@ -924,8 +936,8 @@ def cmd_add(args, cfg: Config) -> int:
         source=adapter.canonical_source(new_src, new_target),
         source_lang=_lang_for(rel),
         history=[
-            f"{datetime.date.today().isoformat()} - initial keystone. "
-            f"{_git_author(cfg.repo_root)}"
+            f"{datetime.date.today().isoformat()} - initial keystone "
+            f"({_git_author(cfg.repo_root)})"
         ],
     )
     sidecar.write(cfg.sidecar_path(args.category, args.id), entry)
