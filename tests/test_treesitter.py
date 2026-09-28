@@ -2,6 +2,7 @@
 
 import dataclasses
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -140,8 +141,8 @@ def test_marker_attached_to_nothing_is_an_error():
 
 
 def test_hasher_id_carries_language_and_grammar_version():
-    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/2+typescript@")
-    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/2+hcl@")
+    assert ts.hasher_id_for_path("app.ts").startswith("keystones-ts/3+typescript@")
+    assert ts.hasher_id_for_path("main.tf").startswith("keystones-ts/3+hcl@")
     assert ts.hasher_id_for_path("app.ts") != ts.hasher_id_for_path("ledger.go")
 
 
@@ -502,3 +503,63 @@ def test_a_one_line_body_with_a_local_rehashes_to_itself(path, shape):
     target = ts.resolve(src, only(path, src))
     stored = ts.canonical_source(src, target)
     assert ts.hash_stored_source(stored, str(target)) == ts.hashes(src, target)[0]
+
+
+# --- every source token reaches the canonical form ---------------------------
+
+BQ_SRC = """WITH
+  -- keystone: scoped
+  scoped AS (
+    SELECT t.user_id, t.kind IN ('A', 'B') AS in_scope
+    FROM ds.events AS t
+    WHERE t.ts IS NULL
+  )
+SELECT * FROM scoped
+"""
+
+SAMPLES = {
+    "app.ts": TS_SRC,
+    "ledger.go": GO_SRC,
+    "main.tf": TF_SRC,
+    "m.sql": (
+        "-- keystone: v\n"
+        "create view v as select t.a, b.c from ds.t join ds.b on t.k = b.k\n"
+    ),
+    "q.bqsql": BQ_SRC,
+}
+
+
+@pytest.fixture
+def bigquery_ext():
+    spec = next(s for s in ts.SPECS if s.language == "sql_bigquery")
+    ts.install_user_specs((dataclasses.replace(spec, extensions=(".bqsql",)),))
+    yield
+    ts.install_user_specs(())
+
+
+@pytest.mark.parametrize("path", sorted(SAMPLES))
+def test_every_word_of_the_source_reaches_the_rendering(path, bigquery_ext):
+    """A node whose text is not the sum of its children hides part of the
+    code from the hash. BigQuery's `ds.events` was one; this guards them all."""
+    src = SAMPLES[path]
+    spec = ts.spec_for(path)
+    root = ts._parse(spec, src).root_node
+    rendered = ts._render(root, spec.comments, spec)
+    code = "\n".join(
+        line
+        for line in src.splitlines()
+        if not line.lstrip().startswith(("//", "#", "--"))
+    )
+    words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code))
+    missing = [w for w in words if w not in rendered and w.lower() not in rendered]
+    assert not missing, missing
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [("ds.events", "ds.other_table"), ("t.kind", "t.other_col"), ("t.ts", "t.other")],
+)
+def test_changing_a_qualified_name_in_bigquery_moves_the_hash(bigquery_ext, old, new):
+    before = semantic("q.bqsql", BQ_SRC)
+    after = semantic("q.bqsql", BQ_SRC.replace(old, new))
+    assert before != after

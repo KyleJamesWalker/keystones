@@ -441,7 +441,7 @@ a plugin is in play; `hasher` carries both:
 
 ```toml
 hash = "dbt"
-hasher = "keystones-ts/2+sql_bigquery@1.20.0/a1b2c3d4e5f6+dbt/1"
+hasher = "keystones-ts/3+sql_bigquery@1.20.0/a1b2c3d4e5f6+dbt/1"
 ```
 
 Masked content is hashed verbatim, so a template expression is not a hole in
@@ -521,7 +521,7 @@ a pin. Each entry's hasher id records the grammar version and a digest of the
 language spec that produced the hash:
 
 ```
-keystones-ts/2+typescript@1.20.0/4957071ba1a6
+keystones-ts/3+typescript@1.20.0/4957071ba1a6
 ```
 
 That, not the install requirement, is what makes hashes deterministic. The spec

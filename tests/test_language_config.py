@@ -75,7 +75,7 @@ def test_the_hasher_id_names_the_configured_grammar(repo, run_cli):
     (repo / "rev.bqsql").write_text(VIEW_SRC)
     run_cli("add", "--id", "net-revenue", "-m", "Rev rec rule.")
     sidecar = (repo / "keystones" / "finance" / "net-revenue.md").read_text()
-    assert "keystones-ts/2+sql_bigquery@" in sidecar
+    assert "keystones-ts/3+sql_bigquery@" in sidecar
 
 
 def test_a_table_edit_that_cannot_move_the_hash_is_silent(repo, run_cli):

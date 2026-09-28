@@ -27,7 +27,7 @@ from keystones.config import options_digest
 from keystones.hashing import digest
 from keystones.models import Marker, Scope, Target
 
-SERIALIZER_VERSION = 2
+SERIALIZER_VERSION = 3
 
 
 class Unavailable(Exception):
@@ -403,11 +403,23 @@ def _render(
         if spec is not None:
             return _normalise_leaf(node, spec)
         return f"{node.type}:{node.text.decode('utf-8', 'replace')!r}"
-    parts = [
-        rendered
-        for child in node.children
-        if (rendered := _render(child, comments, spec)) is not None
-    ]
+    # A node whose text is more than its children, such as BigQuery's
+    # `identifier` for `ds.events` with only the `.` as a child, would
+    # otherwise drop the names from the hash. The gaps are rendered as text.
+    parts: list[str] = []
+    text = node.text
+    cursor = node.start_byte
+    for child in node.children:
+        gap = text[cursor - node.start_byte : child.start_byte - node.start_byte]
+        if gap.strip():
+            parts.append(f"text:{gap.decode('utf-8', 'replace').strip()!r}")
+        rendered = _render(child, comments, spec)
+        if rendered is not None:
+            parts.append(rendered)
+        cursor = child.end_byte
+    tail = text[cursor - node.start_byte :]
+    if tail.strip():
+        parts.append(f"text:{tail.decode('utf-8', 'replace').strip()!r}")
     return f"{node.type}({','.join(parts)})"
 
 
