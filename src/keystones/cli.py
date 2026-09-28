@@ -344,6 +344,18 @@ def _adopt(args, cfg: Config) -> int:
         if item.marker.id == keystone_id
         and wanted_category in ("", item.marker.category)
     ]
+    doomed = [m for m in match if cfg.unreviewed_by(m.marker.path)]
+    match = [m for m in match if m not in doomed]
+    if not match and doomed:
+        item = doomed[0]
+        print(
+            f"keystones: [C18] {item.marker.path} matches "
+            f"'{cfg.unreviewed_by(item.marker.path)}' in [tool.keystones] "
+            "unreviewed, so it is rewritten without review and no gate can hold "
+            "there.",
+            file=sys.stderr,
+        )
+        return 1
     if not match:
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
@@ -370,15 +382,6 @@ def _adopt(args, cfg: Config) -> int:
 
     item = match[0]
     category = item.marker.category
-    pattern = cfg.unreviewed_by(item.marker.path)
-    if pattern is not None:
-        print(
-            f"keystones: [C18] {item.marker.path} matches '{pattern}' in "
-            "[tool.keystones] unreviewed, so it is rewritten without review and "
-            "no gate can hold there.",
-            file=sys.stderr,
-        )
-        return 1
     if cfg.sidecar_path(category, keystone_id).exists():
         print(
             f"keystones: '{keystone_id}' already exists in {category}",
