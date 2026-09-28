@@ -259,3 +259,55 @@ def test_a_later_broader_rule_with_the_same_owner_is_fine(repo, run_cli):
         "/.github/CODEOWNERS  @org/eng\n"
     )
     assert run_cli("check", "--all", "--no-base") == 0
+
+
+# --- a category nobody uses ------------------------------------------------------
+
+
+def test_an_unused_implicit_default_needs_no_owner(repo, run_cli):
+    """`default` is always present in config; a repo that lists only its own
+    categories and keystones nothing under default is not told to own it."""
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'categories = ["default", "finance"]', 'categories = ["finance"]'
+        )
+    )
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert (
+        run_cli(
+            "add",
+            "billing/payout.py::compute_payout",
+            "--id",
+            "p",
+            "--category",
+            "finance",
+            "-m",
+            "w",
+        )
+        == 0
+    )
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+def test_a_category_in_use_still_needs_an_owner(repo, run_cli, capsys):
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'categories = ["default", "finance"]', 'categories = ["finance"]'
+        )
+    )
+    (repo / ".github" / "CODEOWNERS").write_text(
+        "/keystones/finance/  @org/finance\n"
+        "/pyproject.toml      @org/eng\n"
+        "/.github/CODEOWNERS  @org/eng\n"
+    )
+    assert (
+        run_cli("add", "billing/payout.py::compute_payout", "--id", "p", "-m", "w") == 0
+    )
+    assert run_cli("check", "--all", "--no-base") == 1
+    assert "category 'default' has no CODEOWNERS owner" in capsys.readouterr().err

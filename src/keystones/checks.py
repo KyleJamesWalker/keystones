@@ -593,7 +593,8 @@ def run_all(
         findings += c5_stored_source(entries)
         findings += c6_uniqueness(resolved)
         findings += c6_shadowed_targets(cfg, resolved)
-        findings += c8_ownership(cfg)
+        used = {e.category for e in entry_list} | {i.marker.category for i in resolved}
+        findings += c8_ownership(cfg, used)
         findings += c11_dependencies(cfg, entry_list)
         findings += c17_twins(cfg, entry_list)
         findings += stale_report(cfg, entry_list)
@@ -669,8 +670,12 @@ def _shadowed(what: str, rule, hidden, owners_rel: str | None) -> Finding:
     )
 
 
-def c8_ownership(cfg: Config) -> list[Finding]:
-    """The gate is only real if its own files are owned. See keystones/codeowners.py."""
+def c8_ownership(cfg: Config, used: set[str] | None = None) -> list[Finding]:
+    """The gate is only real if its own files are owned. See keystones/codeowners.py.
+
+    A category named in config was meant to be owned. The implicit `default`
+    was not chosen by anyone, so it is probed only once a keystone uses it.
+    """
     from keystones import codeowners
 
     owners_file, rules = codeowners.find(cfg.repo_root)
@@ -720,6 +725,9 @@ def c8_ownership(cfg: Config) -> list[Finding]:
             findings.append(_shadowed(f"{rel} is", rule, hidden, owners_rel))
 
     for category in cfg.categories:
+        implicit = category == "default" and cfg.implicit_default
+        if implicit and used is not None and category not in used:
+            continue
         probe = f"{cfg.root}/{category}/_probe.md"
         rule, hidden = codeowners.shadowed(rules, probe)
         if rule is None or not rule.owners:

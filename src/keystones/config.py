@@ -149,6 +149,8 @@ class Config:
     max_scan_bytes: int = 2_000_000
     # The keys that name a YAML list item, in order of preference.
     yaml_selector_keys: tuple[str, ...] = ("name", "id", "key")
+    # True when `default` was added here rather than listed in config.
+    implicit_default: bool = False
 
     @property
     def sidecar_root(self) -> Path:
@@ -521,7 +523,8 @@ def load(repo_root: Path | None = None) -> Config:
     cap = data.get("max_scan_bytes", 2_000_000)
     if isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0:
         raise ConfigError("tool.keystones.max_scan_bytes must be a positive integer")
-    if "default" not in categories:
+    implicit_default = "default" not in categories
+    if implicit_default:
         categories = ("default", *categories)
     return Config(
         repo_root=root,
@@ -535,4 +538,5 @@ def load(repo_root: Path | None = None) -> Config:
         include=tuple(data.get("include", [])),
         max_scan_bytes=cap,
         yaml_selector_keys=tuple(data.get("yaml_selector_keys", ("name", "id", "key"))),
+        implicit_default=implicit_default,
     )
