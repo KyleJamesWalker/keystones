@@ -354,10 +354,6 @@ def _adopt(args, cfg: Config) -> int:
     whose boundaries are already in the file.
     """
     resolved, _, findings, _ = scan(cfg, None)
-    if findings:
-        _report(findings, "plain")
-        return 1
-
     wanted_category, _, keystone_id = args.id.rpartition("/")
     match = [
         item
@@ -378,6 +374,7 @@ def _adopt(args, cfg: Config) -> int:
         )
         return 1
     if not match:
+        _report(findings, "plain")
         print(
             f"keystones: no marker with id '{args.id}' in the tree. Pass a target to "
             "write one, or check the id.",
@@ -403,6 +400,16 @@ def _adopt(args, cfg: Config) -> int:
 
     item = match[0]
     category = item.marker.category
+    # A problem in the target's own file blocks; one elsewhere is somebody
+    # else's, and must not stop this keystone from being adopted.
+    blocking = [f for f in findings if f.path == item.marker.path]
+    if blocking:
+        _report(blocking, "plain")
+        return 1
+    for finding in findings:
+        print(
+            f"keystones: warning: elsewhere, {finding.format_plain()}", file=sys.stderr
+        )
     if cfg.sidecar_path(category, keystone_id).exists():
         print(
             f"keystones: '{keystone_id}' already exists in {category}",
