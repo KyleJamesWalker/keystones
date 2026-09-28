@@ -85,5 +85,5 @@ testpaths = ["tests"]
 
 [tool.keystones]
 root = "keystones"
-exclude = ["tests/fixtures/**"]
+exclude = ["tests/**"]
 categories = ["default", "hasher"]
