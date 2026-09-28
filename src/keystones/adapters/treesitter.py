@@ -660,7 +660,54 @@ def hash_stored_source(source: str, target: str) -> str:
     raise ResolutionError(f"{target}: stored source contains no definition")
 
 
-def render_symbol(src: str, symbol: str) -> str | None:
+# Languages whose attributes can be named in `depends`, as `NAME` at the top
+# level or `<block qualname>.NAME` inside a block.
+_ATTRIBUTE_NODES = {"hcl": "attribute"}
+
+
+def _attributes(root, spec: LanguageSpec) -> list[tuple[str, object]]:
+    node_type = _ATTRIBUTE_NODES.get(spec.language)
+    if node_type is None:
+        return []
+    # Node objects are recreated on every access, so key by position, not id.
+    blocks = {
+        (node.start_byte, node.end_byte): qualname
+        for qualname, node in _definitions(root, spec)
+    }
+    out: list[tuple[str, object]] = []
+
+    def walk(node, prefix: str) -> None:
+        for child in node.children:
+            if child.type == node_type:
+                name = next(
+                    (
+                        c.text.decode("utf-8", "replace")
+                        for c in child.children
+                        if c.type == "identifier"
+                    ),
+                    None,
+                )
+                if name:
+                    out.append((f"{prefix}.{name}" if prefix else name, child))
+                continue
+            walk(child, blocks.get((child.start_byte, child.end_byte), prefix))
+
+    walk(root, "")
+    return out
+
+
+def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
+    """Canonical text for a `depends` target: a definition, or an HCL attribute."""
+    spec = spec_for(path)
+    if spec is None:
+        return None
+    root = _parse(spec, src).root_node
+    for qualname, node in _definitions(root, spec):
+        if qualname == symbol:
+            return _render(_outermost(node, spec), spec.comments, spec)
+    for qualname, node in _attributes(root, spec):
+        if qualname == symbol:
+            return _render(node, spec.comments, spec)
     return None
 
 

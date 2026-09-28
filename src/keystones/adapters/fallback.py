@@ -169,7 +169,7 @@ def canonical_source(src: str, target: Target) -> str:
     return _body(src, target)
 
 
-def render_symbol(src: str, symbol: str) -> str | None:
+def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
     return None
 
 

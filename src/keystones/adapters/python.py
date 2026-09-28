@@ -268,7 +268,7 @@ def _constant(tree: ast.Module, name: str, path: str) -> ast.AST | None:
     return bound[0] if bound else None
 
 
-def render_symbol(src: str, symbol: str) -> str | None:
+def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
     """Canonical text for a `depends` target: a definition, constant or attribute."""
     tree = ast.parse(src)
     for qualname, node in _definitions(tree):

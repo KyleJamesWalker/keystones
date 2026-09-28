@@ -115,3 +115,157 @@ def test_absent_depends_hash_compares_equal_to_the_empty_hash(repo, run_cli):
     path = repo / "billing" / "payout.py"
     path.write_text("# a new leading comment\n" + path.read_text())
     assert run_cli("fix") == 0, "a pure move must not demand a note"
+
+
+# --- tree-sitter targets --------------------------------------------------
+
+from keystones.adapters import treesitter as ts  # noqa: E402
+
+needs_extra = pytest.mark.skipif(not ts.available(), reason="needs the 'all' extra")
+
+TERRAGRUNT = "infra/terragrunt.hcl"
+TG_SRC = """inputs = {
+  region   = "us-east1"
+  replicas = 3
+}
+
+locals {
+  rate = 0.07
+}
+
+resource "google_compute_network_peering" "prod" {
+  peer_network  = var.peer
+  export_routes = true
+}
+"""
+
+
+@pytest.fixture
+def with_hcl_deps(repo, run_cli):
+    (repo / "infra").mkdir()
+    (repo / TERRAGRUNT).write_text(TG_SRC)
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "payout-rounding",
+            "--category",
+            "finance",
+            "-m",
+            "GAAP rounding.",
+            "--depends",
+            f"{TERRAGRUNT}::inputs",
+            "--depends",
+            f"{TERRAGRUNT}::locals.rate",
+            "--depends",
+            f"{TERRAGRUNT}::resource.google_compute_network_peering.prod.export_routes",
+        )
+        == 0
+    )
+    return repo
+
+
+def edit_hcl(repo, old, new):
+    path = repo / TERRAGRUNT
+    text = path.read_text()
+    assert old in text
+    path.write_text(text.replace(old, new))
+
+
+@needs_extra
+def test_hcl_attributes_resolve_and_pass_clean(with_hcl_deps, run_cli):
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_extra
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("replicas = 3", "replicas = 5"),
+        ("rate = 0.07", "rate = 0.09"),
+        ("export_routes = true", "export_routes = false"),
+    ],
+    ids=["top-level attribute", "locals attribute", "block attribute"],
+)
+def test_changing_an_hcl_attribute_trips_c11(with_hcl_deps, run_cli, old, new):
+    edit_hcl(with_hcl_deps, old, new)
+    assert run_cli("check", "--all", "--no-base") == 1
+
+
+@needs_extra
+def test_reformatting_hcl_does_not_trip_c11(with_hcl_deps, run_cli):
+    edit_hcl(with_hcl_deps, '  region   = "us-east1"', '  region = "us-east1"')
+    edit_hcl(with_hcl_deps, "peer_network  = var.peer", "peer_network = var.peer")
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_extra
+def test_a_sibling_attribute_edit_does_not_trip_c11(with_hcl_deps, run_cli):
+    edit_hcl(with_hcl_deps, "peer_network  = var.peer", "peer_network  = var.other")
+    assert run_cli("check", "--all", "--no-base") == 0
+
+
+@needs_extra
+def test_a_block_is_a_dependency_too(repo, run_cli):
+    (repo / "infra").mkdir()
+    (repo / TERRAGRUNT).write_text(TG_SRC)
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "p",
+            "--category",
+            "finance",
+            "-m",
+            "why.",
+            "--depends",
+            f"{TERRAGRUNT}::resource.google_compute_network_peering.prod",
+        )
+        == 0
+    )
+    edit_hcl(repo, "peer_network  = var.peer", "peer_network  = var.other")
+    assert run_cli("check", "--all", "--no-base") == 1
+
+
+@needs_extra
+def test_a_typescript_definition_is_a_dependency(repo, run_cli):
+    (repo / "fees.ts").write_text("export const FEE = 0.03;\nexport function f() {}\n")
+    assert (
+        run_cli(
+            "add",
+            f"{PAYOUT}::compute_payout",
+            "--id",
+            "p",
+            "--category",
+            "finance",
+            "-m",
+            "why.",
+            "--depends",
+            "fees.ts::FEE",
+        )
+        == 0
+    )
+    (repo / "fees.ts").write_text("export const FEE = 0.04;\nexport function f() {}\n")
+    assert run_cli("check", "--all", "--no-base") == 1
+
+
+@needs_extra
+def test_an_unknown_hcl_symbol_is_refused(repo, run_cli, capsys):
+    (repo / "infra").mkdir()
+    (repo / TERRAGRUNT).write_text(TG_SRC)
+    status = run_cli(
+        "add",
+        f"{PAYOUT}::compute_payout",
+        "--id",
+        "p",
+        "--category",
+        "finance",
+        "-m",
+        "why.",
+        "--depends",
+        f"{TERRAGRUNT}::locals.nope",
+    )
+    assert status == 1
+    assert "locals.nope not found" in capsys.readouterr().err

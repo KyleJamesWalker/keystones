@@ -121,6 +121,12 @@ or a class attribute (`::Fees.SURCHARGE`). Either can also carry a keystone of
 its own, as long as it is bound once in its scope:
 `keystones add billing/helpers.py::BASE_RATE`.
 
+In a tree-sitter language a dependency is any definition the language offers,
+such as `fees.ts::FEE`. Terraform and HCL also take attributes: a Terragrunt
+`inputs` block as `terragrunt.hcl::inputs`, and one inside a block as
+`main.tf::locals.rate` or
+`main.tf::resource.google_compute_network_peering.prod.export_routes`.
+
 A keystoned test can be switched off without touching it, by a skip on its
 class or a `pytestmark`. That is [C16]: the sidecar records what disabled it at
 the last review, so switching it off, or back on, needs its owner. pytest and

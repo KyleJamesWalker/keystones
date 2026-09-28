@@ -166,7 +166,13 @@ def hash_stored_source(source: str, target: str) -> str:
     return digest(tree.render(defs[0] if defs else None) + suffix)
 
 
-def render_symbol(src: str, symbol: str) -> str | None:
+def render_symbol(src: str, symbol: str, path: str = "") -> str | None:
+    if not path:
+        return None
+    tree = _tree(spec_for(path), src)
+    for d in tree.definitions():
+        if d.qualname == symbol:
+            return tree.render(d)
     return None
 
 
